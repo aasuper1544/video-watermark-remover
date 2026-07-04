@@ -1,0 +1,57 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Editor / IDE configs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Project-specific temporary / output folders
+temp_uploads/*
+!temp_uploads/.gitkeep
+
+output/*
+!output/.gitkeep
+
+processed_outputs/*
+!processed_outputs/.gitkeep
+
+test_outputs/*
+!test_outputs/.gitkeep
+
+# Large AI Model weights (exceeds GitHub 100MB file limit)
+models/lama_fp32.onnx

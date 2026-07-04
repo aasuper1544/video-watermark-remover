@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClearVision AI - 智能视频去水印大师</title>
+    <!-- 引入高质感 Google 字体 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+SC:wght@300;400;700&display=swap" rel="stylesheet">
+    <!-- 引入图标库 FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 引入自定义样式 -->
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- 引入前端交互脚本 -->
+    <script src="/static/app.js?v=999" defer></script>
+</head>
+<body>
+    <div class="stars-bg"></div>
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+
+    <div class="container">
+        <!-- 头部标题 -->
+        <header>
+            <div class="logo">
+                <i class="fa-solid fa-wand-magic-sparkles magic-icon"></i>
+                <h1>ClearVision <span>AI</span></h1>
+            </div>
+            <p class="subtitle">专业的本地智能视频去水印工具</p>
+        </header>
+
+        <!-- 主面板 -->
+        <main class="glass-card">
+            <!-- 步骤 1：视频上传区 -->
+            <section id="step-upload" class="step-content active">
+                <div class="upload-dropzone" id="dropzone">
+                    <input type="file" id="file-input" accept="video/*" style="display: none;">
+                    <div class="upload-icon">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                    </div>
+                    <h3>拖拽视频文件到此处</h3>
+                    <p>或者 <label for="file-input" class="browse-btn" style="cursor: pointer;">浏览本地文件</label></p>
+                    <div class="formats-info">支持 MP4, AVI, MOV, MKV 等常见视频格式</div>
+                </div>
+            </section>
+
+            <!-- 步骤 2：选区与配置区 -->
+            <section id="step-configure" class="step-content">
+                <div class="config-grid">
+                    <!-- 左侧：交互式视频帧画布 -->
+                    <div class="preview-panel">
+                        <div class="canvas-container" id="canvas-container">
+                            <canvas id="preview-canvas"></canvas>
+                        </div>
+                        
+                        <div class="timeline-container" id="timeline-container" style="display: none; margin-top: 15px;">
+                            <div class="timeline-header" style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span><i class="fa-solid fa-clock"></i> 时间轴 (可拖动预览任意帧)</span>
+                                <span id="time-display" style="font-family: monospace; font-size: 0.9em; color: var(--text-muted);">00:00 / 00:00</span>
+                            </div>
+                            <input type="range" id="timeline-slider" min="0" max="100" value="0" class="custom-slider" style="width: 100%;">
+                        </div>
+
+                        <div id="comparison-view" style="display: none; margin-top: 15px; border: 2px dashed #10b981; padding: 10px; border-radius: 10px; background: rgba(16, 185, 129, 0.05);">
+                            <h4 style="color: #10b981; margin-bottom: 10px; text-align: center;"><i class="fa-solid fa-check-circle"></i> 修复后效果 (纯净无遮挡)</h4>
+                            <img id="after-image" src="" alt="After Repair" style="width: 100%; border-radius: 8px; display: block;">
+                        </div>
+
+                        <div class="regions-controls" style="margin-top: 20px;">
+                            <!-- 遮罩选区操作框（纯CSS与JS控制的拖拽层） -->
+                            <div id="selection-box" class="hidden">
+                                <div class="resize-handle nw"></div>
+                                <div class="resize-handle ne"></div>
+                                <div class="resize-handle sw"></div>
+                                <div class="resize-handle se"></div>
+                                <div class="box-label">水印区域</div>
+                            </div>
+                        </div>
+                        <div class="preview-actions">
+                            <button id="btn-play-frame" class="btn btn-secondary">
+                                <i class="fa-solid fa-images"></i> 重新采样帧
+                            </button>
+                            <span class="video-dims-badge" id="video-dims">0x0</span>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：控制与选项 -->
+                    <div class="control-panel">
+                        <h2>配置水印移除参数</h2>
+                        
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-shapes"></i> 快速选择预设</label>
+                            <div class="preset-buttons">
+                                <button type="button" class="btn btn-preset active" data-preset="bottom-right">右下角</button>
+                                <button type="button" class="btn btn-preset" data-preset="top-right">右上角</button>
+                                <button type="button" class="btn btn-preset" data-preset="bottom-left">左下角</button>
+                                <button type="button" class="btn btn-preset" data-preset="manual">自定义拉框</button>
+                            </div>
+                        </div>
+                        
+                        <button type="button" id="btn-add-region" class="btn btn-secondary" style="width: 100%; margin-bottom: 20px; border: 1px dashed rgba(255,255,255,0.4);"><i class="fa-solid fa-plus"></i> 添加更多去水印区域</button>
+
+                        <div class="form-group">
+                            <label for="select-method"><i class="fa-solid fa-wand-magic"></i> 去除算法模式</label>
+                            <select id="select-method" class="custom-select">
+                                <option value="lama" selected>🌿 模式 A：精准抠字修复 (保留视频原背景，最自然)</option>
+                                <option value="lama_full">💥 模式 B：强力整块覆盖 (破坏原背景，有涂抹感，无留痕)</option>
+                            </select>
+                            <span class="help-text" id="method-help">如果发现边缘有残留，建议调大下方的“阴影吞噬”数值，尽量避免使用强力整块覆盖。</span>
+                        </div>
+
+                        <div class="form-group" id="feather-group">
+                            <div class="slider-header">
+                                <label for="input-feather"><i class="fa-solid fa-expand"></i> 阴影吞噬 (向外扩张)</label>
+                                <span class="slider-value" id="feather-value">5px</span>
+                            </div>
+                            <input type="range" id="input-feather" min="0" max="30" value="5" class="custom-slider">
+                            <span class="help-text">调节此参数可以让算法吃掉边缘极淡的半透明水印阴影。</span>
+                        </div>
+
+                        <div class="action-buttons" style="display: flex; flex-direction: column; gap: 15px;">
+                            <button type="button" id="btn-preview-frame" class="btn btn-secondary btn-glow" style="border: 1px solid #6366f1;">
+                                <i class="fa-solid fa-bolt"></i> ✨ 生成当前帧修复预览
+                            </button>
+                            <button type="button" id="btn-start" class="btn btn-primary btn-glow">
+                                <i class="fa-solid fa-bolt"></i> 开始去除水印
+                            </button>
+                            <button id="btn-reset-upload" class="btn btn-danger">
+                                <i class="fa-solid fa-arrow-rotate-left"></i> 重新上传
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 步骤 3：实时进度条 -->
+            <section id="step-processing" class="step-content">
+                <div class="processing-container">
+                    <div class="loader-ripple">
+                        <div></div><div></div>
+                    </div>
+                    <h2>正在努力处理中...</h2>
+                    
+                    <div class="progress-wrapper">
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="progress-stats">
+                            <span id="progress-percent">0%</span>
+                            <span id="progress-eta">剩余时间: 计算中...</span>
+                        </div>
+                    </div>
+
+                    <!-- 处理画面实时轮播 -->
+                    <div class="realtime-preview-box">
+                        <div class="preview-title">实时处理画面预览</div>
+                        <div class="preview-img-wrap">
+                            <img id="realtime-preview-img" src="" alt="等待视频帧数据...">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 步骤 4：处理成功页面 -->
+            <section id="step-result" class="step-content">
+                <div class="result-container">
+                    <div class="success-header">
+                        <div class="success-icon">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </div>
+                        <h2>去水印任务处理完成！</h2>
+                    </div>
+
+                    <!-- 视频播放预览 -->
+                    <div class="result-video-wrapper">
+                        <video id="result-video-player" controls></video>
+                    </div>
+
+                    <!-- FFmpeg 丢失警告提示 -->
+                    <div id="ffmpeg-warning" class="warning-box hidden">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <div class="warning-content">
+                            <h4>原视频音轨合并失败 (未检测到 FFmpeg)</h4>
+                            <p>由于您的系统未配置 FFmpeg，去水印视频暂无声音，且可能无法在浏览器中直接播放。</p>
+                            <p><strong>解决办法：</strong>点击下方下载按钮使用本地播放器播放。如需导出完美带声视频，请参考项目根目录下的 <a href="file:///D:/video-watermark-remover/README.md" target="_blank">README.md</a> 指引放置 ffmpeg.exe 可执行文件。</p>
+                        </div>
+                    </div>
+
+                    <div class="result-actions">
+                        <a id="btn-download" href="#" class="btn btn-primary btn-glow" download>
+                            <i class="fa-solid fa-download"></i> 立即下载去水印视频
+                        </a>
+                        <button id="btn-restart" class="btn btn-secondary">
+                            <i class="fa-solid fa-rotate-left"></i> 处理新视频
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+        
+        <footer>
+            <p>© 2026 Antigravity. Powered by FastAPI & OpenCV.</p>
+        </footer>
+    </div>
+</body>
+</html>
