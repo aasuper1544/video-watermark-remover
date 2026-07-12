@@ -8,6 +8,7 @@ import base64
 import threading
 import re
 import imageio_ffmpeg
+import queue
 
 # LaMa ONNX AI 修复模型（懒加载单例）
 _lama_session = None
@@ -34,6 +35,11 @@ def _download_lama_model(model_path):
         return True
     except Exception as e:
         print(f"\n[ERROR] 自动下载模型失败: {e}")
+        if os.path.exists(model_path):
+            try:
+                os.remove(model_path)
+            except Exception:
+                pass
         print("💡 请尝试手动下载该模型，并命名为 lama_fp32.onnx 放入 models/ 文件夹中。")
         return False
 
@@ -63,11 +69,23 @@ def _get_lama_session():
                     print(f"LaMa 模型加载失败: {e}")
     return _lama_session
 
+# 全局任务状态字典与线程锁
+jobs_status = {}
+jobs_lock = threading.Lock()
+
+def update_job_status(job_id: str, **kwargs):
+    """线程安全地更新任务状态"""
+    with jobs_lock:
+        if job_id in jobs_status:
+            for k, v in kwargs.items():
+                jobs_status[job_id][k] = v
+
 def has_active_jobs() -> bool:
     """检查是否有正在进行的去水印任务"""
-    for job in jobs_status.values():
-        if job.get("status") == "processing":
-            return True
+    with jobs_lock:
+        for job in list(jobs_status.values()):
+            if job.get("status") == "processing":
+                return True
     return False
 
 def cleanup_lama_session(force: bool = False):
@@ -82,11 +100,99 @@ def cleanup_lama_session(force: bool = False):
             import gc
             gc.collect()
 
+# 全局先进先出队列
+job_queue = queue.Queue()
+_worker_thread = None
+_worker_lock = threading.Lock()
+
+def _queue_worker():
+    """先进先出任务处理消费线程"""
+    print("[Queue] Background queue worker thread started.")
+    while True:
+        try:
+            job_info = job_queue.get()
+            if job_info is None:
+                break
+            job_id, regions, method, feather, output_path, video_path, output_dir = job_info
+            
+            # 判断在开始处理前，任务是否已被用户取消
+            with jobs_lock:
+                status = jobs_status.get(job_id, {}).get("status")
+            if status == "canceled":
+                job_queue.task_done()
+                continue
+                
+            # 更新状态为开始处理
+            update_job_status(job_id, status="processing")
+            
+            try:
+                # 实例化 WatermarkRemover 并调用逐帧处理
+                remover = WatermarkRemover(video_path, output_dir)
+                remover._process_via_opencv(job_id, regions, method, feather, output_path)
+            except Exception as e:
+                print(f"[Queue Error] Job {job_id} failed: {e}")
+                with jobs_lock:
+                    if jobs_status.get(job_id, {}).get("status") not in ["completed", "canceled"]:
+                        jobs_status[job_id]["status"] = "failed"
+                        jobs_status[job_id]["error_message"] = str(e)
+            finally:
+                job_queue.task_done()
+        except Exception as e:
+            print(f"[Queue Worker Exception] {e}")
+            time.sleep(1)
+
+def start_queue_worker():
+    """启动全局排队工作线程（单例）"""
+    global _worker_thread
+    with _worker_lock:
+        if _worker_thread is None:
+            _worker_thread = threading.Thread(target=_queue_worker)
+            _worker_thread.daemon = True
+            _worker_thread.start()
+
 # 全局任务状态字典
 jobs_status = {}
+active_processes = {}
+active_processes_lock = threading.Lock()
 
 def get_job_status(job_id: str):
-    return jobs_status.get(job_id, {"status": "not_found"})
+    with jobs_lock:
+        status = jobs_status.get(job_id)
+        if status is not None:
+            return status.copy()
+        return {"status": "not_found"}
+
+def cancel_job(job_id: str) -> bool:
+    """取消指定的任务"""
+    with jobs_lock:
+        job = jobs_status.get(job_id)
+        if not job:
+            return False
+        
+        if job.get("status") not in ["processing", "pending"]:
+            return False
+            
+        job["status"] = "canceled"
+        job["progress"] = 0
+        job["error_message"] = "任务已被用户取消"
+    
+    # 终止关联的子进程
+    with active_processes_lock:
+        if job_id in active_processes:
+            proc = active_processes[job_id]
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception as e:
+                print(f"终止子进程 {job_id} 失败: {e}")
+                try:
+                    proc.kill()
+                except:
+                    pass
+            finally:
+                active_processes.pop(job_id, None)
+                
+    return True
 
 class WatermarkRemover:
     def __init__(self, video_path: str, output_dir: str):
@@ -309,29 +415,24 @@ class WatermarkRemover:
             r['w'] = max(2, min(r['w'], self.width - r['x']))
             r['h'] = max(2, min(r['h'], self.height - r['y']))
 
-        # 初始化任务进度
-        jobs_status[job_id] = {
-            "progress": 0,
-            "status": "processing",
-            "eta": 0,
-            "error_message": "",
-            "preview_frame": "",
-            "ffmpeg_used": False
-        }
-        
-        # 开启后台线程处理
-        t = threading.Thread(target=self._process_thread, args=(job_id, regions, method, feather))
-        t.daemon = True
-        t.start()
-        
-    def _process_thread(self, job_id: str, regions: list, method: str, feather: int):
-        ffmpeg_path = self.get_ffmpeg_path()
         final_filename = f"processed_{job_id}.mp4"
         final_output_path = os.path.join(self.output_dir, final_filename)
+
+        # 初始化任务进度，将初始状态设为 pending (排队中)
+        with jobs_lock:
+            jobs_status[job_id] = {
+                "progress": 0,
+                "status": "pending",
+                "eta": 0,
+                "error_message": "",
+                "preview_frame": "",
+                "ffmpeg_used": False,
+                "video_path": self.video_path,
+                "output_path": final_output_path
+            }
         
-        # 对于多区域去除，我们强制回退到 OpenCV 模式
-        jobs_status[job_id]["ffmpeg_used"] = False
-        self._process_via_opencv(job_id, regions, method, feather, final_output_path)
+        # 将任务投递到先进先出队列，由后台单个 worker 线程消费执行
+        job_queue.put((job_id, regions, method, feather, final_output_path, self.video_path, self.output_dir))
 
     def _process_via_ffmpeg(self, job_id: str, ffmpeg_path: str, x: int, y: int, w: int, h: int, method: str, feather: int, output_path: str):
         """利用 FFmpeg 核心过滤器极速处理视频去水印，并完美保留音轨"""
@@ -352,26 +453,27 @@ class WatermarkRemover:
         else:
             filter_str = f"delogo=x={x}:y={y}:w={w}:h={h}:band=1:show=0"
 
-        # 方案 A：使用 Visually Lossless（视觉无损）编码（CRF=12），且直接无损 copy 音频流，最大化保持原汁原味
+        # 方案 A：使用 Visually Lossless（视觉无损）编码（CRF=12），并对音频进行重编码为高兼容性 AAC 音频流，最大化网页播放兼容性
         cmd_a = [
             ffmpeg_path, "-y",
             "-i", self.video_path,
             "-filter_complex" if method in ["blur", "mosaic"] else "-vf", filter_str,
             "-c:v", "libx264",
-            "-crf", "12",  # 视觉无损超高质量，除水印区域外，其余画面像素压缩率极低、无损保留
+            "-crf", "12",  # 视觉无损超高质量
             "-preset", "ultrafast",
             "-pix_fmt", "yuv420p",
-            "-c:a", "copy",  # 无损复制音频流
+            "-c:a", "aac",  # 转码为标准的 AAC，保证主流浏览器兼容
+            "-b:a", "192k",
             "-shortest",
             output_path
         ]
         
-        print(f"正在尝试 FFmpeg 方案 A (CRF=12, 音频 copy)...")
+        print(f"正在尝试 FFmpeg 方案 A (CRF=12, 音频 AAC 重编码)...")
         success = self._run_ffmpeg_cmd(cmd_a, job_id)
         
         if not success:
-            # 方案 A 失败（可能因为音频流格式不支持直接 copy 到 mp4 容器），切换为方案 B
-            print("FFmpeg 方案 A 失败，正在尝试方案 B (CRF=12, 音频重编码为高码率 AAC)...")
+            # 方案 A 失败，切换为方案 B (无损直接复制音频)
+            print("FFmpeg 方案 A 失败，正在尝试方案 B (CRF=12, 音频直接 copy)...")
             cmd_b = [
                 ffmpeg_path, "-y",
                 "-i", self.video_path,
@@ -380,8 +482,7 @@ class WatermarkRemover:
                 "-crf", "12",
                 "-preset", "ultrafast",
                 "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",  # 高码率 AAC 音频，无损感听觉
+                "-c:a", "copy",
                 "-shortest",
                 output_path
             ]
@@ -390,9 +491,7 @@ class WatermarkRemover:
                 raise RuntimeError("FFmpeg 方案 A 和方案 B 均执行失败，将触发 OpenCV 回退机制")
 
         # 运行成功，更新状态为完成
-        jobs_status[job_id]["progress"] = 100
-        jobs_status[job_id]["status"] = "completed"
-        jobs_status[job_id]["eta"] = 0
+        update_job_status(job_id, progress=100, status="completed", eta=0)
 
     def _run_ffmpeg_cmd(self, cmd: list, job_id: str) -> bool:
         """执行 FFmpeg 命令行并实时解析进度"""
@@ -412,9 +511,20 @@ class WatermarkRemover:
                 errors='ignore'
             )
             
+            with active_processes_lock:
+                if jobs_status.get(job_id, {}).get("status") == "canceled":
+                    process.terminate()
+                    return False
+                active_processes[job_id] = process
+            
             start_time = time.time()
             
             while True:
+                if jobs_status.get(job_id, {}).get("status") == "canceled":
+                    process.terminate()
+                    process.wait()
+                    break
+                    
                 line = process.stderr.readline()
                 if not line:
                     break
@@ -429,8 +539,7 @@ class WatermarkRemover:
                     fps_calc = current_frame / elapsed if elapsed > 0 else 1.0
                     eta = int((self.total_frames - current_frame) / fps_calc) if fps_calc > 0 else 0
                     
-                    jobs_status[job_id]["progress"] = progress
-                    jobs_status[job_id]["eta"] = eta
+                    update_job_status(job_id, progress=progress, eta=eta)
                     
             process.wait()
             return process.returncode == 0
@@ -438,6 +547,9 @@ class WatermarkRemover:
         except Exception as e:
             print(f"执行 FFmpeg 命令出错: {e}")
             return False
+        finally:
+            with active_processes_lock:
+                active_processes.pop(job_id, None)
 
     def _process_via_opencv(self, job_id: str, regions: list, method: str, feather: int, output_path: str):
         """OpenCV 逐帧处理"""
@@ -448,8 +560,7 @@ class WatermarkRemover:
             
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
-            jobs_status[job_id]["status"] = "failed"
-            jobs_status[job_id]["error_message"] = "无法打开视频源文件"
+            update_job_status(job_id, status="failed", error_message="无法打开视频源文件")
             return
 
         temp_filename = f"temp_{job_id}.mp4"
@@ -458,6 +569,10 @@ class WatermarkRemover:
         # 使用 mp4v 编码进行中间处理
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(temp_output_path, fourcc, self.fps, (self.width, self.height))
+        if not out.isOpened():
+            update_job_status(job_id, status="failed", error_message="无法创建临时输出视频文件，请检查磁盘空间或写入权限")
+            cap.release()
+            return
         # 自动向四周扩展 15 像素以保证膨胀（dilation）有足够的边界空间而不被剪裁
         expanded_regions = []
         for region in regions:
@@ -574,6 +689,8 @@ class WatermarkRemover:
         
         try:
             while True:
+                if jobs_status.get(job_id, {}).get("status") == "canceled":
+                    raise InterruptedError("任务被用户取消")
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -742,17 +859,19 @@ class WatermarkRemover:
                     _, buf = cv2.imencode('.jpg', small_frame)
                     preview_b64 = base64.b64encode(buf).decode('utf-8')
                     
-                    jobs_status[job_id]["progress"] = progress
-                    jobs_status[job_id]["eta"] = eta
-                    jobs_status[job_id]["preview_frame"] = preview_b64
+                    update_job_status(job_id, progress=progress, eta=eta, preview_frame=preview_b64)
                     
             cap.release()
             out.release()
             
-            # 使用 FFmpeg 重新打包，无损融合原视频的音轨并将视频转换为标准的网页播放 H.264
+            # 使用 FFmpeg 重新打包，对其重新编码为高兼容性 H.264/AAC，保证能在所有 HTML5 网页播放器中流畅播放
             ffmpeg_path = self.get_ffmpeg_path()
+            ffmpeg_success = False
             if ffmpeg_path:
-                print("正在通过 FFmpeg 合并音轨并导出视觉无损视频...")
+                if jobs_status.get(job_id, {}).get("status") == "canceled":
+                    raise InterruptedError("任务被用户取消")
+                print("正在通过 FFmpeg 合并音轨并导出视觉无损且高兼容性的视频 (H.264/AAC)...")
+                # 方案 A：转码为标准的 AAC (保证各浏览器兼容性)
                 cmd_a = [
                     ffmpeg_path, "-y",
                     "-i", temp_output_path,
@@ -760,10 +879,11 @@ class WatermarkRemover:
                     "-map", "0:v",
                     "-map", "1:a?",
                     "-c:v", "libx264",
-                    "-crf", "12",  # 视觉无损画质，确保除了被去掉的水印外，其余画面像素 100% 同原视频一模一样
+                    "-crf", "12",  # 视觉无损画质
                     "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p",
-                    "-c:a", "copy",  # 无损拷贝音轨
+                    "-c:a", "aac",  # 转码为标准的 AAC
+                    "-b:a", "192k",
                     "-shortest",
                     output_path
                 ]
@@ -773,12 +893,35 @@ class WatermarkRemover:
                     startupinfo = subprocess.STARTUPINFO()
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     
-                proc = subprocess.run(cmd_a, startupinfo=startupinfo, capture_output=True)
+                proc = subprocess.Popen(cmd_a, startupinfo=startupinfo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                with active_processes_lock:
+                    if jobs_status.get(job_id, {}).get("status") == "canceled":
+                        proc.terminate()
+                    else:
+                        active_processes[job_id] = proc
                 
-                if proc.returncode == 0:
-                    jobs_status[job_id]["ffmpeg_used"] = True
+                try:
+                    while proc.poll() is None:
+                        if jobs_status.get(job_id, {}).get("status") == "canceled":
+                            proc.terminate()
+                            proc.wait()
+                            break
+                        time.sleep(0.1)
+                finally:
+                    with active_processes_lock:
+                        active_processes.pop(job_id, None)
+                
+                if jobs_status.get(job_id, {}).get("status") == "canceled":
+                    raise InterruptedError("任务被用户取消")
+                
+                if proc.returncode == 0 and os.path.exists(output_path):
+                    update_job_status(job_id, ffmpeg_used=True)
+                    ffmpeg_success = True
                 else:
-                    # 方案 B
+                    # 方案 B：直接复制音频轨道作为备用方案
+                    if jobs_status.get(job_id, {}).get("status") == "canceled":
+                        raise InterruptedError("任务被用户取消")
+                    print("FFmpeg 方案 A (AAC 转码) 失败，尝试方案 B (音频 copy)...")
                     cmd_b = [
                         ffmpeg_path, "-y",
                         "-i", temp_output_path,
@@ -789,26 +932,57 @@ class WatermarkRemover:
                         "-crf", "12",
                         "-preset", "ultrafast",
                         "-pix_fmt", "yuv420p",
-                        "-c:a", "aac",
-                        "-b:a", "192k",
+                        "-c:a", "copy",
                         "-shortest",
                         output_path
                     ]
-                    proc_b = subprocess.run(cmd_b, startupinfo=startupinfo)
-                    if proc_b.returncode == 0:
-                        jobs_status[job_id]["ffmpeg_used"] = True
-                
-                # 清除无声临时文件
+                    proc_b = subprocess.Popen(cmd_b, startupinfo=startupinfo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    with active_processes_lock:
+                        if jobs_status.get(job_id, {}).get("status") == "canceled":
+                            proc_b.terminate()
+                        else:
+                            active_processes[job_id] = proc_b
+                    
+                    try:
+                        while proc_b.poll() is None:
+                            if jobs_status.get(job_id, {}).get("status") == "canceled":
+                                proc_b.terminate()
+                                proc_b.wait()
+                                break
+                            time.sleep(0.1)
+                    finally:
+                        with active_processes_lock:
+                            active_processes.pop(job_id, None)
+                            
+                    if jobs_status.get(job_id, {}).get("status") == "canceled":
+                        raise InterruptedError("任务被用户取消")
+                        
+                    if proc_b.returncode == 0 and os.path.exists(output_path):
+                        update_job_status(job_id, ffmpeg_used=True)
+                        ffmpeg_success = True
+            
+            # 如果 FFmpeg 重新打包成功，清除临时无声文件
+            if ffmpeg_success:
                 try:
                     os.remove(temp_output_path)
                 except:
                     pass
             else:
-                shutil.move(temp_output_path, output_path)
+                # 如果 FFmpeg 重新打包失败或不可用，回退到无声视频
+                print("FFmpeg 合并失败或不可用，将回退到无声视频作为最终输出")
+                if os.path.exists(output_path):
+                    try:
+                        os.remove(output_path)
+                    except:
+                        pass
+                if os.path.exists(temp_output_path):
+                    shutil.move(temp_output_path, output_path)
+                else:
+                    raise RuntimeError("视频帧处理后的临时文件丢失，无法生成最终视频")
             
-            jobs_status[job_id]["progress"] = 100
-            jobs_status[job_id]["status"] = "completed"
-            jobs_status[job_id]["eta"] = 0
+            if jobs_status.get(job_id, {}).get("status") == "canceled":
+                raise InterruptedError("任务被用户取消")
+            update_job_status(job_id, progress=100, status="completed", eta=0)
             
         except Exception as e:
             cap.release()
@@ -816,7 +990,19 @@ class WatermarkRemover:
                 out.release()
             except:
                 pass
-            jobs_status[job_id]["status"] = "failed"
-            jobs_status[job_id]["error_message"] = str(e)
+            if os.path.exists(temp_output_path):
+                try:
+                    os.remove(temp_output_path)
+                except Exception:
+                    pass
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+            if jobs_status.get(job_id, {}).get("status") == "canceled":
+                pass
+            else:
+                update_job_status(job_id, status="failed", error_message=str(e))
         finally:
             cleanup_lama_session()

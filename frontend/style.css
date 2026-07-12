@@ -481,6 +481,14 @@ header {
     outline: none;
 }
 
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
 .btn-primary {
     background: linear-gradient(135deg, #4f46e5, #ec4899);
     color: white;
@@ -507,6 +515,10 @@ header {
     border-radius: 14px;
     filter: blur(12px);
     opacity: 0;
+}
+
+.btn-glow:disabled::before {
+    opacity: 0 !important;
 }
 
 .btn-glow:hover::after {
@@ -1116,3 +1128,197 @@ footer {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+/* 移动端自适应设计 (平板与大屏手机 <= 768px) */
+@media (max-width: 768px) {
+    .container {
+        width: 95%;
+        margin: 15px auto;
+        gap: 15px;
+    }
+    
+    .glass-card {
+        padding: 20px 15px;
+        min-height: auto;
+    }
+    
+    .logo h1 {
+        font-size: 1.8rem;
+    }
+    
+    .subtitle {
+        font-size: 0.95rem;
+    }
+    
+    .upload-dropzone {
+        padding: 45px 15px;
+    }
+    
+    .upload-icon {
+        font-size: 2.8rem;
+    }
+    
+    .config-grid {
+        gap: 20px;
+    }
+    
+    .preview-panel {
+        padding: 10px;
+    }
+    
+    .control-panel {
+        gap: 20px;
+    }
+    
+    .comparison-view {
+        padding: 12px;
+        gap: 10px;
+    }
+    
+    .toast-container {
+        right: 5%;
+        top: 12px;
+        width: 90%;
+    }
+}
+
+/* 移动端自适应设计 (窄屏手机 <= 480px) */
+@media (max-width: 480px) {
+    .container {
+        width: 96%;
+        margin: 10px auto;
+        gap: 10px;
+    }
+    
+    .glass-card {
+        padding: 15px 10px;
+    }
+    
+    .logo h1 {
+        font-size: 1.5rem;
+    }
+    
+    .preset-buttons {
+        grid-template-columns: 1fr; /* 窄屏幕上改为单列以防挤压变形 */
+    }
+    
+    .preview-actions {
+        flex-direction: column;
+        gap: 8px;
+        align-items: stretch;
+    }
+    
+    .preview-actions button {
+        width: 100%;
+    }
+    
+    .video-dims-badge {
+        text-align: center;
+    }
+    
+    .action-buttons {
+        gap: 10px;
+    }
+}
+
+/* 批量上传与队列列表通用样式 */
+.batch-list-container {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 15px;
+    margin-top: 20px;
+    animation: fadeIn 0.4s ease forwards;
+}
+.batch-table-wrap {
+    overflow-x: auto;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.2);
+}
+.batch-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    color: var(--text-color);
+}
+.batch-table th, .batch-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    vertical-align: middle;
+}
+.batch-table th {
+    background: rgba(255, 255, 255, 0.05);
+    font-weight: 600;
+    color: var(--text-muted);
+}
+.batch-table tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* 视频排队与处理状态徽章 */
+.badge-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+.badge-status.pending {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-muted);
+}
+.badge-status.processing {
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--primary-color);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+}
+.badge-status.completed {
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--success-color);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+.badge-status.failed {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-color);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.badge-status.canceled {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* 队列小进度条 */
+.mini-progress-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+.mini-progress-bg {
+    flex: 1;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.mini-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--secondary-color), var(--primary-color));
+    width: 0%;
+    transition: width 0.3s ease;
+}
+.mini-progress-text {
+    font-size: 0.8rem;
+    font-family: monospace;
+    width: 35px;
+    text-align: right;
+}
+.queue-container {
+    animation: fadeIn 0.4s ease forwards;
+}
+

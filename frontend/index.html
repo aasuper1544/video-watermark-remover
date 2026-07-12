@@ -35,13 +35,37 @@
             <!-- 步骤 1：视频上传区 -->
             <section id="step-upload" class="step-content active">
                 <div class="upload-dropzone" id="dropzone">
-                    <input type="file" id="file-input" accept="video/*" style="display: none;">
+                    <input type="file" id="file-input" accept="video/*" style="display: none;" multiple>
                     <div class="upload-icon">
                         <i class="fa-solid fa-cloud-arrow-up"></i>
                     </div>
-                    <h3>拖拽视频文件到此处</h3>
+                    <h3>拖拽视频文件到此处 (支持批量拖入)</h3>
                     <p>或者 <label for="file-input" class="browse-btn" style="cursor: pointer;">浏览本地文件</label></p>
                     <div class="formats-info">支持 MP4, AVI, MOV, MKV 等常见视频格式</div>
+                </div>
+                
+                <!-- 批量上传管理列表 -->
+                <div id="batch-upload-list-container" class="batch-list-container hidden" style="margin-top: 20px;">
+                    <h4 style="margin-bottom: 10px; color: var(--text-color);"><i class="fa-solid fa-list-check"></i> 待处理素材列表 (<span id="batch-upload-count">0</span>)</h4>
+                    <div class="batch-table-wrap">
+                        <table class="batch-table" id="batch-files-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px;"><input type="checkbox" id="chk-select-all" checked></th>
+                                    <th>视频名称</th>
+                                    <th style="width: 100px;">大小</th>
+                                    <th style="width: 150px;">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody id="batch-files-body">
+                                <!-- 动态生成上传的文件 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="batch-upload-actions" style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                        <span class="help-text" style="color: var(--text-muted); font-size: 0.85rem;">提示：勾选想要处理的视频，然后在下一步配置水印框并一键批量处理！</span>
+                        <button id="btn-next-config" class="btn btn-primary" style="display: none; padding: 10px 20px;"><i class="fa-solid fa-circle-arrow-right"></i> 下一步：配置去水印选区</button>
+                    </div>
                 </div>
             </section>
 
@@ -181,6 +205,41 @@
                         <div class="preview-img-wrap">
                             <img id="realtime-preview-img" src="" alt="等待视频帧数据...">
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 步骤 3.5：批量队列监控大屏 -->
+            <section id="step-batch-queue" class="step-content">
+                <div class="queue-container" style="padding: 10px 5px;">
+                    <div style="text-align: center; margin-bottom: 25px;">
+                        <h2 style="font-size: 1.8rem; margin-bottom: 8px;"><i class="fa-solid fa-list-ol" style="color: var(--primary-color);"></i> 视频去水印队列监控大屏</h2>
+                        <p class="subtitle" style="color: var(--text-muted);">系统正在后台为您依次排队处理视频，您可以随时在此处监控进度并下载已完成的视频</p>
+                    </div>
+                    
+                    <div class="batch-table-wrap" style="max-height: 400px; overflow-y: auto;">
+                        <table class="batch-table" id="queue-monitor-table">
+                            <thead>
+                                <tr>
+                                    <th>视频名称</th>
+                                    <th style="width: 250px;">进度</th>
+                                    <th style="width: 120px; text-align: center;">状态</th>
+                                    <th style="width: 180px; text-align: center;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="queue-monitor-body">
+                                <!-- 动态生成队列中的任务进度 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="queue-footer-actions" style="margin-top: 25px; display: flex; justify-content: center; gap: 15px;">
+                        <button id="btn-cancel-all" class="btn btn-danger" style="padding: 10px 20px;">
+                            <i class="fa-solid fa-ban"></i> 全部取消
+                        </button>
+                        <button id="btn-queue-restart" class="btn btn-secondary" style="padding: 10px 20px;">
+                            <i class="fa-solid fa-rotate-left"></i> 返回重新上传
+                        </button>
                     </div>
                 </div>
             </section>

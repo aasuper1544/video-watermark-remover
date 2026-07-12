@@ -92,14 +92,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const onTransitionEnd = () => {
             toast.remove();
             toast.removeEventListener('transitionend', onTransitionEnd);
-        };
-        toast.addEventListener('transitionend', onTransitionEnd);
-    }
-
-    const steps = {
+        const steps = {
         upload: document.getElementById('step-upload'),
         configure: document.getElementById('step-configure'),
         processing: document.getElementById('step-processing'),
+        batchQueue: document.getElementById('step-batch-queue'),
         result: document.getElementById('step-result')
     };
 
@@ -114,8 +111,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- 步骤 1：文件上传逻辑 ---
-    
+    // --- 步骤 1：批量文件上传逻辑 ---
+    let uploadedFiles = []; // 保存当前所有已上传或解析就绪的视频对象
+
     // 拖拽文件样式交互
     dropzone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -130,84 +128,215 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         dropzone.classList.remove('dragover');
         if (e.dataTransfer.files.length > 0) {
-            handleVideoUpload(e.dataTransfer.files[0]);
+            handleBatchUpload(Array.from(e.dataTransfer.files));
         }
     });
-
+    
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-            handleVideoUpload(e.target.files[0]);
+            handleBatchUpload(Array.from(e.target.files));
         }
     });
 
-    // 统一文件上传处理
-    function handleVideoUpload(file) {
-        // 创建 FormData 上传
-        const formData = new FormData();
-        formData.append('file', file);
-
-        // 显示加载态 (优化为 futuristic loader spinner)
-        dropzone.innerHTML = `
-            <div class="loader-spinner" style="margin: 0 auto 15px;"></div>
-            <h3>正在上传并解析视频...</h3>
-            <p style="color: var(--text-muted); font-size: 0.9rem;">由于需要读取视频流并生成首帧预览图，请耐心等待几秒钟</p>
-        `;
-
-        fetch('/api/upload', {
-            method: 'POST',
-            body: formData
-        })
-        .then(res => {
-            if (!res.ok) {
-                return res.json().then(err => { throw new Error(err.detail || '上传失败') });
-            }
-            return res.json();
-        })
-        .then(data => {
-            currentVideoId = data.video_id;
-            videoWidth = data.width;
-            videoHeight = data.height;
-            videoFps = data.fps;
-            videoTotalFrames = data.total_frames;
-            videoDimsBadge.textContent = `${videoWidth} x ${videoHeight} (${data.fps.toFixed(1)} FPS)`;
+    // 统一处理批量上传
+    async function handleBatchUpload(files) {
+        const listContainer = document.getElementById('batch-upload-list-container');
+        listContainer.classList.remove('hidden');
+        
+        for (let file of files) {
+            // 避免重复添加同名素材
+            if (uploadedFiles.some(f => f.name === file.name)) continue;
             
-            // 初始化时间轴
-            if (videoTotalFrames > 0) {
-                timelineSlider.max = videoTotalFrames - 1;
-                timelineSlider.value = 0;
-                timelineContainer.style.display = 'block';
-                updateTimeDisplay(0, videoFps, videoTotalFrames);
-            }
-            
-            // 加载第一帧图像
-            previewImage.onload = () => {
-                initCanvas();
-                showStep('configure');
+            const fileItem = {
+                id: 'file-' + Math.random().toString(36).substr(2, 9),
+                name: file.name,
+                size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+                status: 'waiting', // waiting, uploading, ready, failed
+                progress: 0,
+                videoId: null,
+                width: 0,
+                height: 0,
+                fps: 30,
+                totalFrames: 0,
+                previewFrame: null,
+                selected: true,
+                rawFile: file
             };
-            previewImage.src = 'data:image/jpeg;base64,' + data.preview_frame;
-        })
-        .catch(err => {
-            showToast('上传解析失败: ' + err.message, 'error');
-            // 恢复上传区初始 HTML
-            resetUploadZone();
-        });
+            uploadedFiles.push(fileItem);
+        }
+        
+        renderBatchFilesTable();
+        
+        // 依次串行上传所有 waiting 的文件
+        for (let fileItem of uploadedFiles) {
+            if (fileItem.status === 'waiting') {
+                await uploadSingleFileItem(fileItem);
+            }
+        }
     }
 
+    function renderBatchFilesTable() {
+        const tbody = document.getElementById('batch-files-body');
+        const countSpan = document.getElementById('batch-upload-count');
+        tbody.innerHTML = '';
+        countSpan.textContent = uploadedFiles.length;
+        
+        uploadedFiles.forEach(file => {
+            let statusText = '';
+            if (file.status === 'waiting') {
+                statusText = '<span style="color: var(--text-muted);"><i class="fa-solid fa-hourglass-start"></i> 排队上传...</span>';
+            } else if (file.status === 'uploading') {
+                statusText = `<span style="color: var(--primary-color);"><i class="fa-solid fa-spinner fa-spin"></i> 上传中 (${file.progress}%)</span>`;
+            } else if (file.status === 'ready') {
+                statusText = '<span style="color: var(--success-color); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> 解析就绪</span>';
+            } else if (file.status === 'failed') {
+                statusText = '<span style="color: var(--danger-color);"><i class="fa-solid fa-circle-xmark"></i> 解析失败</span>';
+            }
+            
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><input type="checkbox" class="chk-file-select" data-id="${file.id}" ${file.selected ? 'checked' : ''} ${file.status === 'ready' ? '' : 'disabled'}></td>
+                <td style="word-break: break-all; max-width: 300px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${file.name}</td>
+                <td>${file.size}</td>
+                <td>${statusText}</td>
+            `;
+            tbody.appendChild(tr);
+            
+            // 绑定单个选择事件
+            const chk = tr.querySelector('.chk-file-select');
+            chk.addEventListener('change', (e) => {
+                file.selected = e.target.checked;
+                updateNextButtonVisibility();
+            });
+        });
+        
+        updateNextButtonVisibility();
+    }
+
+    // 全选按钮事件
+    document.getElementById('chk-select-all').addEventListener('change', (e) => {
+        const isChecked = e.target.checked;
+        uploadedFiles.forEach(file => {
+            if (file.status === 'ready') {
+                file.selected = isChecked;
+            }
+        });
+        renderBatchFilesTable();
+    });
+
+    function updateNextButtonVisibility() {
+        const nextBtn = document.getElementById('btn-next-config');
+        const hasReadyAndSelected = uploadedFiles.some(f => f.status === 'ready' && f.selected);
+        if (hasReadyAndSelected) {
+            nextBtn.style.display = 'block';
+        } else {
+            nextBtn.style.display = 'none';
+        }
+    }
+
+    async function uploadSingleFileItem(fileItem) {
+        fileItem.status = 'uploading';
+        fileItem.progress = 0;
+        renderBatchFilesTable();
+        
+        const formData = new FormData();
+        formData.append('file', fileItem.rawFile);
+        
+        try {
+            await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/upload');
+                
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        fileItem.progress = Math.round((e.loaded / e.total) * 100);
+                        renderBatchFilesTable();
+                    }
+                };
+                
+                xhr.onload = () => {
+                    if (xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            fileItem.status = 'ready';
+                            fileItem.videoId = data.video_id;
+                            fileItem.width = data.width;
+                            fileItem.height = data.height;
+                            fileItem.fps = data.fps;
+                            fileItem.totalFrames = data.total_frames;
+                            fileItem.previewFrame = data.preview_frame;
+                            resolve();
+                        } catch (e) {
+                            reject(new Error('解析返回值失败'));
+                        }
+                    } else {
+                        try {
+                            const err = JSON.parse(xhr.responseText);
+                            reject(new Error(err.detail || '服务解析出错'));
+                        } catch {
+                            reject(new Error('HTTP 上传错误: ' + xhr.status));
+                        }
+                    }
+                };
+                
+                xhr.onerror = () => reject(new Error('网络请求失败'));
+                xhr.send(formData);
+            });
+        } catch (err) {
+            fileItem.status = 'failed';
+            showToast(`素材 ${fileItem.name} 上传解析失败: ` + err.message, 'error');
+        }
+        
+        renderBatchFilesTable();
+    }
+
+    // 下一步配置页面转场事件
+    document.getElementById('btn-next-config').addEventListener('click', () => {
+        const selected = uploadedFiles.filter(f => f.status === 'ready' && f.selected);
+        if (selected.length === 0) return;
+        
+        const first = selected[0];
+        currentVideoId = first.videoId;
+        videoWidth = first.width;
+        videoHeight = first.height;
+        videoFps = first.fps;
+        videoTotalFrames = first.total_frames;
+        videoDimsBadge.textContent = `${videoWidth} x ${videoHeight} (${videoFps.toFixed(1)} FPS) - [配置模板: ${first.name}]`;
+        
+        if (videoTotalFrames > 0) {
+            timelineSlider.max = videoTotalFrames - 1;
+            timelineSlider.value = 0;
+            timelineContainer.style.display = 'block';
+            updateTimeDisplay(0, videoFps, videoTotalFrames);
+        }
+        
+        previewImage.onload = () => {
+            initCanvas();
+            showStep('configure');
+        };
+        previewImage.src = 'data:image/jpeg;base64,' + first.previewFrame;
+    });
+
     function resetUploadZone() {
+        uploadedFiles = [];
+        const listContainer = document.getElementById('batch-upload-list-container');
+        listContainer.classList.add('hidden');
+        document.getElementById('batch-files-body').innerHTML = '';
+        
         dropzone.innerHTML = `
-            <input type="file" id="file-input" accept="video/*" style="display: none;">
+            <input type="file" id="file-input" accept="video/*" style="display: none;" multiple>
             <div class="upload-icon">
                 <i class="fa-solid fa-cloud-arrow-up"></i>
             </div>
-            <h3>拖拽视频文件到此处</h3>
+            <h3>拖拽视频文件到此处 (支持批量拖入)</h3>
             <p>或者 <label for="file-input" class="browse-btn" style="cursor: pointer;">浏览本地文件</label></p>
             <div class="formats-info">支持 MP4, AVI, MOV, MKV 等常见视频格式</div>
         `;
-        // 重新绑定 input file 事件
+        
         const newFileInput = document.getElementById('file-input');
         newFileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
-                handleVideoUpload(e.target.files[0]);
+                handleBatchUpload(Array.from(e.target.files));
             }
         });
     }
@@ -586,6 +715,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalText = btnPreviewFrame.innerHTML;
         btnPreviewFrame.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AI 极速修复中...';
         btnPreviewFrame.disabled = true;
+        if (btnStart) btnStart.disabled = true;
 
         if (canvasLoader) {
             if (canvasLoaderText) canvasLoaderText.textContent = 'AI 正在分析并重构当前帧...';
@@ -628,6 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             btnPreviewFrame.innerHTML = originalText;
             btnPreviewFrame.disabled = false;
+            if (btnStart) btnStart.disabled = false;
             if (canvasLoader) canvasLoader.classList.remove('active');
         }
     });
@@ -641,126 +772,281 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- 启动去水印任务 ---
-    btnStart.addEventListener('click', () => {
-        if (!currentVideoId) return;
+    let queueJobs = []; // 存储排队中的任务对象
 
-        const scaleX = videoWidth / canvasWidth;
-        const scaleY = videoHeight / canvasHeight;
-
-        const regions = selectionBoxes.map(box => {
-            const left = parseFloat(box.style.left) || 0;
-            const top = parseFloat(box.style.top) || 0;
-            const width = parseFloat(box.style.width) || 100;
-            const height = parseFloat(box.style.height) || 50;
-
-            const x = Math.max(0, Math.round(left * scaleX));
-            const y = Math.max(0, Math.round(top * scaleY));
-            const w = Math.min(videoWidth - x, Math.round(width * scaleX));
-            const h = Math.min(videoHeight - y, Math.round(height * scaleY));
-            
-            return { x, y, w, h };
-        });
-
-        const payload = {
-            video_id: currentVideoId,
-            regions: regions,
-            method: selectMethod.value,
-            feather: parseInt(inputFeather.value)
-        };
-
-        // 发送启动任务请求
-        fetch('/api/remove-watermark', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        })
-        .then(res => {
-            if (!res.ok) {
-                return res.json().then(err => { throw new Error(err.detail || '任务创建失败') });
-            }
-            return res.json();
-        })
-        .then(data => {
-            currentJobId = data.job_id;
-            showToast('去水印任务创建成功，开始处理视频...', 'success');
-            showStep('processing');
-            startPollingStatus();
-        })
-        .catch(err => {
-            showToast('去水印任务启动失败: ' + err.message, 'error');
-        });
-    });
-
-    // --- 步骤 3：进度查询轮询 ---
-    function startPollingStatus() {
-        // 重置进度UI
-        progressFill.style.width = '0%';
-        progressPercent.textContent = '0%';
-        progressEta.textContent = '剩余时间: 计算中...';
-        realtimeImg.src = '';
-
-        if (pollInterval) clearInterval(pollInterval);
-        
-        pollInterval = setInterval(() => {
-            if (!currentJobId) return;
-            
-            fetch(`/api/status/${currentJobId}`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'processing') {
-                    // 更新进度
-                    const progress = data.progress || 0;
-                    progressFill.style.width = `${progress}%`;
-                    progressPercent.textContent = `${progress}%`;
-                    progressEta.textContent = `剩余时间: ${data.eta} 秒`;
-                    
-                    // 实时绘制画面预览
-                    if (data.preview_frame) {
-                        realtimeImg.src = 'data:image/jpeg;base64,' + data.preview_frame;
-                    }
-                } else if (data.status === 'completed') {
-                    clearInterval(pollInterval);
-                    showToast('视频去水印任务处理完成！', 'success');
-                    showSuccess(data.ffmpeg_used);
-                } else if (data.status === 'failed') {
-                    clearInterval(pollInterval);
-                    showToast('处理视频失败: ' + (data.error_message || '未知错误'), 'error');
-                    showStep('configure');
-                }
-            })
-            .catch(err => {
-                console.error('进度轮询错误: ', err);
-                // 轮询中的单次网络波动不弹窗，仅记录控制台，避免影响用户体验
-            });
-        }, 800);
-    }
-
-    // --- 步骤 4：处理成功展示 ---
-    function showSuccess(ffmpegUsed) {
-        // 设置视频播放源和下载源
-        const videoSrc = `/api/download/${currentJobId}`;
-        
-        resultVideoPlayer.src = videoSrc;
-        btnDownload.href = videoSrc;
-
-        // 根据 FFmpeg 状态显示或隐藏音频警告
-        if (ffmpegUsed) {
-            ffmpegWarning.classList.add('hidden');
-        } else {
-            ffmpegWarning.classList.remove('hidden');
+    btnStart.addEventListener('click', async () => {
+        const selectedFiles = uploadedFiles.filter(f => f.status === 'ready' && f.selected);
+        if (selectedFiles.length === 0) {
+            showToast('请先选择并上传至少一个解析就绪的视频！', 'warning');
+            return;
         }
 
-        showStep('result');
+        const originalText = btnStart.innerHTML;
+        btnStart.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在创建排队任务...';
+        btnStart.disabled = true;
+        if (btnPreviewFrame) btnPreviewFrame.disabled = true;
+
+        queueJobs = [];
+
+        // 遍历所有选中的视频，并按照各自的分辨率自适应换算水印位置坐标
+        for (let file of selectedFiles) {
+            const fileScaleX = file.width / canvasWidth;
+            const fileScaleY = file.height / canvasHeight;
+            const fileRegions = selectionBoxes.map(box => {
+                const left = parseFloat(box.style.left) || 0;
+                const top = parseFloat(box.style.top) || 0;
+                const width = parseFloat(box.style.width) || 100;
+                const height = parseFloat(box.style.height) || 50;
+
+                const x = Math.max(0, Math.round(left * fileScaleX));
+                const y = Math.max(0, Math.round(top * fileScaleY));
+                const w = Math.min(file.width - x, Math.round(width * fileScaleX));
+                const h = Math.min(file.height - y, Math.round(height * fileScaleY));
+                
+                return { x, y, w, h };
+            });
+
+            const payload = {
+                video_id: file.videoId,
+                regions: fileRegions,
+                method: selectMethod.value,
+                feather: parseInt(inputFeather.value)
+            };
+
+            try {
+                const res = await fetch('/api/remove-watermark', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || '接口失败');
+                }
+                
+                const data = await res.json();
+                queueJobs.push({
+                    jobId: data.job_id,
+                    fileName: file.name,
+                    progress: 0,
+                    status: 'pending',
+                    eta: 0
+                });
+            } catch (err) {
+                showToast(`视频 ${file.name} 加入队列失败: ` + err.message, 'error');
+            }
+        }
+
+        btnStart.innerHTML = originalText;
+        btnStart.disabled = false;
+        if (btnPreviewFrame) btnPreviewFrame.disabled = false;
+
+        if (queueJobs.length > 0) {
+            showToast(`已成功将 ${queueJobs.length} 个视频加入处理队列！`, 'success');
+            showStep('batchQueue');
+            startBatchQueuePolling();
+        }
+    });
+
+    // --- 步骤 3.5：批量队列状态轮询与渲染 ---
+    function startBatchQueuePolling() {
+        if (pollInterval) clearInterval(pollInterval);
+        
+        renderQueueMonitorTable();
+
+        pollInterval = setInterval(async () => {
+            const activeJobs = queueJobs.filter(j => !['completed', 'failed', 'canceled'].includes(j.status));
+            if (activeJobs.length === 0) {
+                clearInterval(pollInterval);
+                showToast('队列中所有任务处理完毕！', 'success');
+                return;
+            }
+
+            // 并发获取所有当前活动任务的最新状态
+            await Promise.all(activeJobs.map(async (job) => {
+                try {
+                    const res = await fetch(`/api/status/${job.jobId}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        job.status = data.status;
+                        job.progress = data.progress || 0;
+                        job.eta = data.eta || 0;
+                    }
+                } catch (e) {
+                    console.error('轮询状态出错:', job.fileName, e);
+                }
+            }));
+
+            renderQueueMonitorTable();
+        }, 1000);
     }
 
-    // 处理新视频重新开始
-    btnRestart.addEventListener('click', () => {
-        currentVideoId = null;
-        currentJobId = null;
+    function renderQueueMonitorTable() {
+        const tbody = document.getElementById('queue-monitor-body');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+
+        queueJobs.forEach(job => {
+            const tr = document.createElement('tr');
+            
+            // 状态 Badge
+            let statusBadge = '';
+            if (job.status === 'pending') {
+                statusBadge = '<span class="badge-status pending"><i class="fa-solid fa-hourglass-half"></i> 排队中</span>';
+            } else if (job.status === 'processing') {
+                statusBadge = '<span class="badge-status processing"><i class="fa-solid fa-spinner fa-spin"></i> 处理中</span>';
+            } else if (job.status === 'completed') {
+                statusBadge = '<span class="badge-status completed"><i class="fa-solid fa-check-circle"></i> 已完成</span>';
+            } else if (job.status === 'failed') {
+                statusBadge = '<span class="badge-status failed"><i class="fa-solid fa-times-circle"></i> 失败</span>';
+            } else if (job.status === 'canceled') {
+                statusBadge = '<span class="badge-status canceled"><i class="fa-solid fa-ban"></i> 已取消</span>';
+            }
+
+            // 进度条渲染
+            let progressHtml = '';
+            if (job.status === 'pending') {
+                progressHtml = '<span style="color: var(--text-muted); font-size: 0.85rem;">等待轮到该任务...</span>';
+            } else {
+                progressHtml = `
+                    <div class="mini-progress-container">
+                        <div class="mini-progress-bg">
+                            <div class="mini-progress-fill" style="width: ${job.progress}%"></div>
+                        </div>
+                        <span class="mini-progress-text">${job.progress}%</span>
+                    </div>
+                `;
+            }
+
+            // 操作按钮
+            let actionHtml = '';
+            if (job.status === 'completed') {
+                actionHtml = `
+                    <a href="/api/download/${job.jobId}" class="btn btn-success" style="padding: 5px 12px; font-size: 0.8rem;" download>
+                        <i class="fa-solid fa-download"></i> 下载
+                    </a>
+                `;
+            } else if (['pending', 'processing'].includes(job.status)) {
+                actionHtml = `
+                    <button class="btn btn-danger btn-cancel-job" data-id="${job.jobId}" style="padding: 5px 12px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-xmark"></i> 取消
+                    </button>
+                `;
+            } else {
+                actionHtml = '<span style="color: var(--text-muted); font-size: 0.85rem;">-</span>';
+            }
+
+            tr.innerHTML = `
+                <td style="word-break: break-all; max-width: 250px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${job.fileName}</td>
+                <td>${progressHtml}</td>
+                <td style="text-align: center;">${statusBadge}</td>
+                <td style="text-align: center;">${actionHtml}</td>
+            `;
+
+            tbody.appendChild(tr);
+        });
+
+        // 绑定取消按钮事件
+        tbody.querySelectorAll('.btn-cancel-job').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const jid = btn.getAttribute('data-id');
+                const res = await fetch(`/api/cancel/${jid}`, { method: 'POST' });
+                if (res.ok) {
+                    showToast('任务已取消', 'info');
+                    const job = queueJobs.find(j => j.jobId === jid);
+                    if (job) job.status = 'canceled';
+                    renderQueueMonitorTable();
+                } else {
+                    showToast('取消任务失败', 'error');
+                }
+            });
+        });
+    }
+
+    // 全部取消按钮事件
+    document.getElementById('btn-cancel-all').addEventListener('click', async () => {
+        const active = queueJobs.filter(j => ['pending', 'processing'].includes(j.status));
+        if (active.length === 0) return;
+        
+        for (let job of active) {
+            try {
+                const res = await fetch(`/api/cancel/${job.jobId}`, { method: 'POST' });
+                if (res.ok) {
+                    job.status = 'canceled';
+                }
+            } catch (e) {
+                console.error('取消任务异常:', job.fileName, e);
+            }
+        }
+        showToast('所有排队及进行中的任务已成功取消', 'info');
+        renderQueueMonitorTable();
+    });
+
+    // 从队列页重新开始上传
+    document.getElementById('btn-queue-restart').addEventListener('click', () => {
         if (pollInterval) clearInterval(pollInterval);
-        resultVideoPlayer.pause();
-        resultVideoPlayer.src = '';
         showStep('upload');
         resetUploadZone();
+    });
+
+    // 窗口尺寸改变自适应处理
+    function handleResize() {
+        const container = document.getElementById('canvas-container');
+        if (!container || !currentVideoId || !videoWidth || !videoHeight) return;
+        
+        const parentWidth = container.parentElement.clientWidth;
+        if (!parentWidth) return;
+        
+        const maxDisplayWidth = Math.min(parentWidth, 680);
+        const aspect = videoWidth / videoHeight;
+        
+        const newCanvasWidth = maxDisplayWidth;
+        const newCanvasHeight = maxDisplayWidth / aspect;
+        
+        // 尺寸无实质变化则不处理
+        if (Math.abs(newCanvasWidth - canvasWidth) < 1 && Math.abs(newCanvasHeight - canvasHeight) < 1) {
+            return;
+        }
+        
+        if (canvasWidth === 0 || canvasHeight === 0) return;
+        
+        const scaleX = newCanvasWidth / canvasWidth;
+        const scaleY = newCanvasHeight / canvasHeight;
+        
+        // 按比例缩放所有选择框
+        selectionBoxes.forEach(box => {
+            const left = parseFloat(box.style.left) || 0;
+            const top = parseFloat(box.style.top) || 0;
+            const width = parseFloat(box.style.width) || 0;
+            const height = parseFloat(box.style.height) || 0;
+            
+            box.style.left = `${left * scaleX}px`;
+            box.style.top = `${top * scaleY}px`;
+            box.style.width = `${width * scaleX}px`;
+            box.style.height = `${height * scaleY}px`;
+        });
+        
+        // 更新全局画布尺寸
+        canvasWidth = newCanvasWidth;
+        canvasHeight = newCanvasHeight;
+        
+        previewCanvas.width = canvasWidth;
+        previewCanvas.height = canvasHeight;
+        
+        container.style.width = `${canvasWidth}px`;
+        container.style.height = `${canvasHeight}px`;
+        
+        // 重绘图像
+        ctx.drawImage(previewImage, 0, 0, canvasWidth, canvasHeight);
+    }
+
+    let resizeTimeout = null;
+    window.addEventListener('resize', () => {
+        if (!currentVideoId) return;
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            handleResize();
+        }, 150);
     });
 });
