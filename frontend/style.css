@@ -134,6 +134,12 @@ header {
     padding: 35px;
     position: relative;
     min-height: 520px;
+    transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+.glass-card:hover {
+    border-color: rgba(99, 102, 241, 0.2);
+    box-shadow: 0 20px 50px var(--glass-shadow), 0 0 40px rgba(99, 102, 241, 0.05);
 }
 
 /* 步骤显示状态 */
@@ -158,7 +164,9 @@ header {
     text-align: center;
     cursor: pointer;
     background: rgba(255, 255, 255, 0.01);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -167,8 +175,9 @@ header {
 
 .upload-dropzone:hover, .upload-dropzone.dragover {
     border-color: var(--primary-color);
-    background: rgba(99, 102, 241, 0.05);
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.15);
+    background: rgba(99, 102, 241, 0.04);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), 0 0 25px rgba(99, 102, 241, 0.1);
+    border-style: solid;
 }
 
 .upload-icon {
@@ -230,12 +239,19 @@ header {
     position: relative;
     max-width: 100%;
     overflow: hidden;
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    border-radius: 12px;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.5);
     background: #000;
     display: flex;
     justify-content: center;
     align-items: center;
+    border: 1px solid var(--glass-border);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.canvas-container:hover {
+    border-color: rgba(99, 102, 241, 0.3);
+    box-shadow: 0 15px 45px rgba(0,0,0,0.6), 0 0 20px rgba(99, 102, 241, 0.1);
 }
 
 #preview-canvas {
@@ -352,20 +368,24 @@ header {
 }
 
 .btn-preset {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(255, 255, 255, 0.02);
     border: 1px solid var(--glass-border);
     color: var(--text-muted);
     padding: 10px;
     border-radius: 8px;
     cursor: pointer;
     font-size: 0.85rem;
-    transition: all 0.25s ease;
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .btn-preset:hover {
-    background: rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.06);
     color: var(--text-main);
-    border-color: rgba(255, 255, 255, 0.15);
+    border-color: rgba(99, 102, 241, 0.3);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2), inset 0 0 5px rgba(255, 255, 255, 0.05);
+    transform: translateY(-1px);
 }
 
 .btn-preset.active {
@@ -373,11 +393,12 @@ header {
     border-color: var(--primary-color);
     color: #a5b4fc;
     font-weight: 600;
+    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.2);
 }
 
 /* 下拉菜单 */
 .custom-select {
-    background: #0f172a;
+    background: rgba(15, 23, 42, 0.6);
     border: 1px solid var(--glass-border);
     color: var(--text-main);
     padding: 12px;
@@ -385,11 +406,19 @@ header {
     font-size: 0.9rem;
     outline: none;
     cursor: pointer;
-    transition: border-color 0.25s;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+}
+
+.custom-select:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(15, 23, 42, 0.8);
 }
 
 .custom-select:focus {
     border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
 }
 
 /* 滑动条 */
@@ -789,4 +818,301 @@ footer {
 @keyframes float {
     0% { transform: translateY(0px); }
     100% { transform: translateY(-8px); }
+}
+
+/* --- State-of-the-Art Loading & Overlay Styles --- */
+.loader-spinner {
+    width: 50px;
+    height: 50px;
+    border: 3px solid rgba(255, 255, 255, 0.03);
+    border-radius: 50%;
+    border-top-color: var(--primary-color);
+    border-right-color: var(--secondary-color);
+    animation: spin 1s linear infinite;
+    filter: drop-shadow(0 0 8px var(--primary-glow));
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.canvas-loader {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(11, 15, 25, 0.8);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    color: #fff;
+    font-weight: 600;
+    font-size: 1rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+.canvas-loader.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.canvas-loader p {
+    background: linear-gradient(to right, #a5b4fc, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-size: 0.95rem;
+    letter-spacing: 0.5px;
+}
+
+/* --- Comparison Slider Layout Styles --- */
+.comparison-view {
+    margin-top: 20px;
+    width: 100%;
+    background: rgba(16, 185, 129, 0.02);
+    border: 1px solid rgba(16, 185, 129, 0.15);
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    animation: fadeIn 0.4s ease;
+}
+
+.comparison-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #10b981;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+    letter-spacing: 0.5px;
+}
+
+.comparison-slider {
+    position: relative;
+    width: 100%;
+    aspect-ratio: var(--aspect-ratio, 16/9);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--glass-border);
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.slider-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.slider-img img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    display: block;
+}
+
+.img-before {
+    z-index: 1;
+}
+
+.img-after {
+    z-index: 2;
+    clip-path: polygon(0 0, var(--clip-pos, 50%) 0, var(--clip-pos, 50%) 100%, 0 100%);
+}
+
+.slider-badge {
+    position: absolute;
+    top: 15px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 3;
+    pointer-events: none;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+
+.badge-before {
+    right: 15px;
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text-muted);
+}
+
+.badge-after {
+    left: 15px;
+    background: rgba(16, 185, 129, 0.6);
+    color: white;
+    border-color: rgba(16, 185, 129, 0.2);
+}
+
+.slider-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--clip-pos, 50%);
+    width: 4px;
+    background: #fff;
+    z-index: 4;
+    cursor: ew-resize;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 0 15px rgba(0, 0, 0, 0.6);
+}
+
+.handle-line {
+    flex-grow: 1;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.4);
+}
+
+.handle-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #fff;
+    color: var(--bg-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    border: 2px solid var(--primary-color);
+    transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.slider-handle:hover .handle-button {
+    transform: scale(1.15);
+    background: var(--primary-color);
+    color: white;
+    border-color: #fff;
+}
+
+/* --- Toast Notifications System Styles --- */
+.toast-container {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 420px;
+    width: 90%;
+    pointer-events: none;
+}
+
+.toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 20px;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+    color: var(--text-main);
+    transform: translateX(120%);
+    transition: transform 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.35s ease;
+    opacity: 0;
+    pointer-events: auto;
+}
+
+.toast.show {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.toast.hide {
+    transform: translateX(120%);
+    opacity: 0;
+}
+
+.toast-icon {
+    font-size: 1.25rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.toast-content {
+    font-size: 0.9rem;
+    font-weight: 500;
+    line-height: 1.45;
+    flex-grow: 1;
+}
+
+.toast-close {
+    cursor: pointer;
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    transition: color 0.2s, transform 0.2s;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0 2px;
+    line-height: 1;
+    margin-top: 1px;
+}
+
+.toast-close:hover {
+    color: var(--text-main);
+    transform: scale(1.1);
+}
+
+.toast-error {
+    border-left: 4px solid var(--accent-color);
+    border-color: rgba(244, 63, 94, 0.2) rgba(244, 63, 94, 0.2) rgba(244, 63, 94, 0.2) var(--accent-color);
+}
+.toast-error .toast-icon {
+    color: var(--accent-color);
+}
+
+.toast-success {
+    border-left: 4px solid var(--secondary-color);
+    border-color: rgba(16, 185, 129, 0.2) rgba(16, 185, 129, 0.2) rgba(16, 185, 129, 0.2) var(--secondary-color);
+}
+.toast-success .toast-icon {
+    color: var(--secondary-color);
+}
+
+.toast-warning {
+    border-left: 4px solid #f59e0b;
+    border-color: rgba(245, 158, 11, 0.2) rgba(245, 158, 11, 0.2) rgba(245, 158, 11, 0.2) #f59e0b;
+}
+.toast-warning .toast-icon {
+    color: #f59e0b;
+}
+
+.toast-info {
+    border-left: 4px solid var(--primary-color);
+    border-color: rgba(99, 102, 241, 0.2) rgba(99, 102, 241, 0.2) rgba(99, 102, 241, 0.2) var(--primary-color);
+}
+.toast-info .toast-icon {
+    color: var(--primary-color);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
 }

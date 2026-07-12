@@ -63,6 +63,25 @@ def _get_lama_session():
                     print(f"LaMa 模型加载失败: {e}")
     return _lama_session
 
+def has_active_jobs() -> bool:
+    """检查是否有正在进行的去水印任务"""
+    for job in jobs_status.values():
+        if job.get("status") == "processing":
+            return True
+    return False
+
+def cleanup_lama_session(force: bool = False):
+    """如果当前没有活动任务（或强制释放），则释放 LaMa ONNX Runtime 会话以释放内存"""
+    global _lama_session
+    if _lama_session is not None:
+        if force or not has_active_jobs():
+            with _lama_lock:
+                if _lama_session is not None and (force or not has_active_jobs()):
+                    _lama_session = None
+                    print("[AI] LaMa ONNX Runtime session released to free memory.")
+            import gc
+            gc.collect()
+
 # 全局任务状态字典
 jobs_status = {}
 
@@ -218,21 +237,42 @@ class WatermarkRemover:
                     crop_mask = mask[cy1:cy2, cx1:cx2]
                     if np.sum(crop_mask) == 0: continue
                     
-                    crop_bgr = frame[cy1:cy2, cx1:cx2].copy()
-                    crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-                    img_tensor = (crop_rgb.astype(np.float32) / 255.0)
-                    img_tensor = np.transpose(img_tensor, (2, 0, 1))[np.newaxis, ...]
-                    mask_tensor = (crop_mask > 127).astype(np.float32)[np.newaxis, np.newaxis, ...]
-                    
-                    inp_img = lama_session.get_inputs()[0].name
-                    inp_mask = lama_session.get_inputs()[1].name
-                    result = lama_session.run(None, {inp_img: img_tensor, inp_mask: mask_tensor})
-                    output = np.transpose(result[0][0], (1, 2, 0))
-                    output_bgr = cv2.cvtColor(np.clip(output, 0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-                    mask_bool = crop_mask > 0
-                    for c in range(3):
-                        crop_bgr[:, :, c][mask_bool] = output_bgr[:, :, c][mask_bool]
-                    frame[cy1:cy2, cx1:cx2] = crop_bgr
+                    img_tensor = None
+                    mask_tensor = None
+                    result = None
+                    try:
+                        crop_bgr = frame[cy1:cy2, cx1:cx2].copy()
+                        crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+                        img_tensor = (crop_rgb.astype(np.float32) / 255.0)
+                        img_tensor = np.transpose(img_tensor, (2, 0, 1))[np.newaxis, ...]
+                        mask_tensor = (crop_mask > 127).astype(np.float32)[np.newaxis, np.newaxis, ...]
+                        
+                        inp_img = lama_session.get_inputs()[0].name
+                        inp_mask = lama_session.get_inputs()[1].name
+                        result = lama_session.run(None, {inp_img: img_tensor, inp_mask: mask_tensor})
+                        output = np.transpose(result[0][0], (1, 2, 0))
+                        output_bgr = cv2.cvtColor(np.clip(output, 0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+                        mask_bool = crop_mask > 0
+                        for c in range(3):
+                            crop_bgr[:, :, c][mask_bool] = output_bgr[:, :, c][mask_bool]
+                        frame[cy1:cy2, cx1:cx2] = crop_bgr
+                    except Exception as e:
+                        print(f"[LaMa Preview Error] {e}")
+                        # 回退到 OpenCV inpaint 修复
+                        margin = 15
+                        ly, lx = max(0, y - margin), max(0, x - margin)
+                        lh, lw = min(self.height - ly, h + margin * 2), min(self.width - lx, w + margin * 2)
+                        local_frame = frame[ly:ly+lh, lx:lx+lw]
+                        local_mask = mask[ly:ly+lh, lx:lx+lw]
+                        if np.sum(local_mask) > 0:
+                            frame[ly:ly+lh, lx:lx+lw] = cv2.inpaint(local_frame, local_mask, inpaintRadius=1, flags=cv2.INPAINT_NS)
+                    finally:
+                        # 显式清理临时变量以释放内存
+                        if 'img_tensor' in locals(): del img_tensor
+                        if 'mask_tensor' in locals(): del mask_tensor
+                        if 'result' in locals(): del result
+                        import gc
+                        gc.collect()
             else:
                 for region in regions:
                     x, y, w, h = region['x'], region['y'], region['w'], region['h']
@@ -529,6 +569,8 @@ class WatermarkRemover:
 
         start_time = time.time()
         processed_frames = 0
+        prev_repaired_crops = {}
+        prev_orig_crops = {}
         
         try:
             while True:
@@ -559,7 +601,7 @@ class WatermarkRemover:
                     # LaMa AI 深度修复
                     lama_session = _get_lama_session()
                     if lama_session is not None:
-                        for region in regions:
+                        for i, region in enumerate(regions):
                             x, y, w, h = region['x'], region['y'], region['w'], region['h']
                             crop_size = 512
                             # 以水印中心为基准，直接从帧中裁出 512x512 区域（无缩放！）
@@ -577,29 +619,65 @@ class WatermarkRemover:
                             if np.sum(crop_mask) == 0:
                                 continue
                             
-                            # 裁剪帧并转 RGB，归一化到 [0,1]
-                            crop_bgr = frame[cy1:cy2, cx1:cx2].copy()
-                            crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-                            img_tensor = (crop_rgb.astype(np.float32) / 255.0)
-                            img_tensor = np.transpose(img_tensor, (2, 0, 1))[np.newaxis, ...]
-                            
-                            mask_tensor = (crop_mask > 127).astype(np.float32)[np.newaxis, np.newaxis, ...]
-                            
-                            # 推理（输出为 [0,255] 范围）
-                            inp_img = lama_session.get_inputs()[0].name
-                            inp_mask = lama_session.get_inputs()[1].name
-                            result = lama_session.run(None, {inp_img: img_tensor, inp_mask: mask_tensor})
-                            
-                            output = result[0][0]  # [3, 512, 512]
-                            output = np.transpose(output, (1, 2, 0))  # -> [512, 512, 3]
-                            output = np.clip(output, 0, 255).astype(np.uint8)
-                            output_bgr = cv2.cvtColor(output, cv2.COLOR_RGB2BGR)
-                            
-                            # 仅替换 mask 区域像素（保留其余原始像素不变）
-                            mask_bool = crop_mask > 0
-                            for c in range(3):
-                                crop_bgr[:, :, c][mask_bool] = output_bgr[:, :, c][mask_bool]
-                            frame[cy1:cy2, cx1:cx2] = crop_bgr
+                            img_tensor = None
+                            mask_tensor = None
+                            result = None
+                            try:
+                                # 裁剪帧并转 RGB，归一化到 [0,1]
+                                crop_bgr = frame[cy1:cy2, cx1:cx2].copy()
+                                orig_crop = crop_bgr.copy()
+                                crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+                                img_tensor = (crop_rgb.astype(np.float32) / 255.0)
+                                img_tensor = np.transpose(img_tensor, (2, 0, 1))[np.newaxis, ...]
+                                
+                                mask_tensor = (crop_mask > 127).astype(np.float32)[np.newaxis, np.newaxis, ...]
+                                
+                                # 推理（输出为 [0,255] 范围）
+                                inp_img = lama_session.get_inputs()[0].name
+                                inp_mask = lama_session.get_inputs()[1].name
+                                result = lama_session.run(None, {inp_img: img_tensor, inp_mask: mask_tensor})
+                                
+                                output = result[0][0]  # [3, 512, 512]
+                                output = np.transpose(output, (1, 2, 0))  # -> [512, 512, 3]
+                                output = np.clip(output, 0, 255).astype(np.uint8)
+                                output_bgr = cv2.cvtColor(output, cv2.COLOR_RGB2BGR)
+                                
+                                # 仅替换 mask 区域像素（保留其余原始像素不变）
+                                mask_bool = crop_mask > 0
+                                for c in range(3):
+                                    crop_bgr[:, :, c][mask_bool] = output_bgr[:, :, c][mask_bool]
+                                    
+                                # 💡 时序动态平滑滤波逻辑：消除独立帧推理引发的水波纹颤动
+                                if i in prev_repaired_crops:
+                                    diff = cv2.absdiff(orig_crop, prev_orig_crops[i])
+                                    mean_diff = np.mean(diff)
+                                    alpha = np.clip(mean_diff / 15.0, 0.15, 1.0)
+                                    crop_bgr = cv2.addWeighted(crop_bgr, alpha, prev_repaired_crops[i], 1.0 - alpha, 0)
+                                    
+                                prev_repaired_crops[i] = crop_bgr.copy()
+                                prev_orig_crops[i] = orig_crop.copy()
+                                
+                                frame[cy1:cy2, cx1:cx2] = crop_bgr
+                            except Exception as e:
+                                print(f"[LaMa Processing Error] {e}")
+                                # 回退到 OpenCV inpaint
+                                margin_fb = 15
+                                ly = max(0, y - margin_fb)
+                                lx = max(0, x - margin_fb)
+                                lh = min(self.height - ly, h + margin_fb * 2)
+                                lw = min(self.width - lx, w + margin_fb * 2)
+                                local_frame = frame[ly:ly+lh, lx:lx+lw]
+                                local_mask = mask[ly:ly+lh, lx:lx+lw]
+                                if np.sum(local_mask) > 0:
+                                    inpainted_local = cv2.inpaint(local_frame, local_mask, inpaintRadius=1, flags=cv2.INPAINT_NS)
+                                    frame[ly:ly+lh, lx:lx+lw] = inpainted_local
+                            finally:
+                                # 释放大变量以防内存泄漏
+                                if 'img_tensor' in locals(): del img_tensor
+                                if 'mask_tensor' in locals(): del mask_tensor
+                                if 'result' in locals(): del result
+                                import gc
+                                gc.collect()
                     else:
                         # LaMa 不可用时回退到 OpenCV inpaint
                         for region in regions:
@@ -740,3 +818,5 @@ class WatermarkRemover:
                 pass
             jobs_status[job_id]["status"] = "failed"
             jobs_status[job_id]["error_message"] = str(e)
+        finally:
+            cleanup_lama_session()

@@ -52,19 +52,42 @@
                     <div class="preview-panel">
                         <div class="canvas-container" id="canvas-container">
                             <canvas id="preview-canvas"></canvas>
+                            <div id="canvas-loader" class="canvas-loader">
+                                <div class="loader-spinner"></div>
+                                <p id="canvas-loader-text">AI 正在处理中...</p>
+                            </div>
                         </div>
                         
                         <div class="timeline-container" id="timeline-container" style="display: none; margin-top: 15px;">
-                            <div class="timeline-header" style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <div class="timeline-header" style="display: flex; justify-content: space-between; margin-bottom: 5px; align-items: center;">
                                 <span><i class="fa-solid fa-clock"></i> 时间轴 (可拖动预览任意帧)</span>
-                                <span id="time-display" style="font-family: monospace; font-size: 0.9em; color: var(--text-muted);">00:00 / 00:00</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span id="time-display" style="font-family: monospace; font-size: 0.9em; color: var(--text-muted);">00:00 / 00:00</span>
+                                    <span id="frame-loading-spinner" style="display: none; color: var(--primary-color); font-size: 0.85rem;"><i class="fa-solid fa-spinner fa-spin"></i></span>
+                                </div>
                             </div>
                             <input type="range" id="timeline-slider" min="0" max="100" value="0" class="custom-slider" style="width: 100%;">
                         </div>
 
-                        <div id="comparison-view" style="display: none; margin-top: 15px; border: 2px dashed #10b981; padding: 10px; border-radius: 10px; background: rgba(16, 185, 129, 0.05);">
-                            <h4 style="color: #10b981; margin-bottom: 10px; text-align: center;"><i class="fa-solid fa-check-circle"></i> 修复后效果 (纯净无遮挡)</h4>
-                            <img id="after-image" src="" alt="After Repair" style="width: 100%; border-radius: 8px; display: block;">
+                        <div id="comparison-view" class="comparison-view" style="display: none;">
+                            <h4 class="comparison-title"><i class="fa-solid fa-square-half-stroke"></i> 修复效果对比 (左右拖动滑块)</h4>
+                            <div class="comparison-slider" id="comp-slider">
+                                <div class="slider-img img-before">
+                                    <img id="before-image" src="" alt="Before Repair">
+                                    <span class="slider-badge badge-before">原视频帧</span>
+                                </div>
+                                <div class="slider-img img-after" id="comp-after-wrapper">
+                                    <img id="after-image" src="" alt="After Repair">
+                                    <span class="slider-badge badge-after">AI 去水印后</span>
+                                </div>
+                                <div class="slider-handle" id="comp-handle">
+                                    <div class="handle-line"></div>
+                                    <div class="handle-button">
+                                        <i class="fa-solid fa-arrows-left-right"></i>
+                                    </div>
+                                    <div class="handle-line"></div>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="regions-controls" style="margin-top: 20px;">
@@ -203,5 +226,8 @@
             <p>© 2026 Antigravity. Powered by FastAPI & OpenCV.</p>
         </footer>
     </div>
+
+    <!-- 吐司提示容器 -->
+    <div id="toast-container" class="toast-container"></div>
 </body>
 </html>

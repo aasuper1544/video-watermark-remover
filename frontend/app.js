@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('file-input');
     const previewCanvas = document.getElementById('preview-canvas');
     const ctx = previewCanvas.getContext('2d');
-        const videoDimsBadge = document.getElementById('video-dims');
+    const videoDimsBadge = document.getElementById('video-dims');
     const timelineContainer = document.getElementById('timeline-container');
     const timelineSlider = document.getElementById('timeline-slider');
     const timeDisplay = document.getElementById('time-display');
@@ -35,6 +35,66 @@ document.addEventListener('DOMContentLoaded', () => {
     const realtimeImg = document.getElementById('realtime-preview-img');
     const resultVideoPlayer = document.getElementById('result-video-player');
     const ffmpegWarning = document.getElementById('ffmpeg-warning');
+
+    // 新增交互元素
+    const canvasLoader = document.getElementById('canvas-loader');
+    const canvasLoaderText = document.getElementById('canvas-loader-text');
+    const frameLoadingSpinner = document.getElementById('frame-loading-spinner');
+    const beforeImage = document.getElementById('before-image');
+
+    // --- 吐司提示系统 ---
+    function showToast(message, type = 'error', duration = 4000) {
+        let toastContainer = document.getElementById('toast-container');
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            toastContainer.className = 'toast-container';
+            document.body.appendChild(toastContainer);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        
+        let iconClass = 'fa-solid fa-circle-exclamation';
+        if (type === 'success') iconClass = 'fa-solid fa-circle-check';
+        if (type === 'warning') iconClass = 'fa-solid fa-triangle-exclamation';
+        if (type === 'info') iconClass = 'fa-solid fa-circle-info';
+
+        toast.innerHTML = `
+            <i class="${iconClass} toast-icon"></i>
+            <div class="toast-content">${message}</div>
+            <button class="toast-close">&times;</button>
+        `;
+
+        toastContainer.appendChild(toast);
+
+        // 触发入场动画
+        setTimeout(() => {
+            toast.classList.add('show');
+        }, 10);
+
+        // 定时自动关闭
+        let dismissTimeout = setTimeout(() => {
+            dismissToast(toast);
+        }, duration);
+
+        // 手动关闭按钮
+        const closeBtn = toast.querySelector('.toast-close');
+        closeBtn.addEventListener('click', () => {
+            clearTimeout(dismissTimeout);
+            dismissToast(toast);
+        });
+    }
+
+    function dismissToast(toast) {
+        toast.classList.remove('show');
+        toast.classList.add('hide');
+        const onTransitionEnd = () => {
+            toast.remove();
+            toast.removeEventListener('transitionend', onTransitionEnd);
+        };
+        toast.addEventListener('transitionend', onTransitionEnd);
+    }
 
     const steps = {
         upload: document.getElementById('step-upload'),
@@ -86,11 +146,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('file', file);
 
-        // 显示加载态
+        // 显示加载态 (优化为 futuristic loader spinner)
         dropzone.innerHTML = `
-            <div class="loader-ripple"><div></div><div></div></div>
+            <div class="loader-spinner" style="margin: 0 auto 15px;"></div>
             <h3>正在上传并解析视频...</h3>
-            <p>由于需要读取视频流并生成首帧预览图，请耐心等待几秒钟</p>
+            <p style="color: var(--text-muted); font-size: 0.9rem;">由于需要读取视频流并生成首帧预览图，请耐心等待几秒钟</p>
         `;
 
         fetch('/api/upload', {
@@ -127,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
             previewImage.src = 'data:image/jpeg;base64,' + data.preview_frame;
         })
         .catch(err => {
-            alert('上传解析失败: ' + err.message);
+            showToast('上传解析失败: ' + err.message, 'error');
             // 恢复上传区初始 HTML
             resetUploadZone();
         });
@@ -247,7 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 box.remove();
                 selectionBoxes = selectionBoxes.filter(b => b !== box);
             } else {
-                alert("至少需要保留一个去水印区域！");
+                showToast("至少需要保留一个去水印区域！", "warning");
             }
         });
 
@@ -407,6 +467,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (timelineTimeout) clearTimeout(timelineTimeout);
         timelineTimeout = setTimeout(async () => {
             if (!currentVideoId) return;
+            
+            // 显示微型加载动画
+            if (frameLoadingSpinner) frameLoadingSpinner.style.display = 'inline-block';
+            
             try {
                 const response = await fetch(`/api/frame/${currentVideoId}?frame_index=${frameIndex}`);
                 const data = await response.json();
@@ -416,19 +480,90 @@ document.addEventListener('DOMContentLoaded', () => {
                         previewImage = tempImg; // Update the global previewImage
                         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
                         ctx.drawImage(previewImage, 0, 0, canvasWidth, canvasHeight);
+                        if (frameLoadingSpinner) frameLoadingSpinner.style.display = 'none';
                     };
                     tempImg.src = 'data:image/jpeg;base64,' + data.frame;
+                } else {
+                    if (frameLoadingSpinner) frameLoadingSpinner.style.display = 'none';
+                    showToast('获取视频帧失败: ' + (data.detail || '未知错误'), 'error');
                 }
             } catch (err) {
+                if (frameLoadingSpinner) frameLoadingSpinner.style.display = 'none';
                 console.error("Failed to fetch frame:", err);
+                showToast('网络请求异常，无法加载视频帧', 'error');
             }
         }, 150);
     });
 
+    // --- 修复预览对比滑动条逻辑 ---
+    const compSlider = document.getElementById('comp-slider');
+    const compHandle = document.getElementById('comp-handle');
+
+    function resetComparisonSlider() {
+        if (!compSlider || !compHandle) return;
+        
+        // 设置默认位置 50%
+        compSlider.style.setProperty('--clip-pos', '50%');
+        compHandle.style.left = '50%';
+        
+        // 设置 aspect-ratio
+        if (videoWidth && videoHeight) {
+            compSlider.style.setProperty('--aspect-ratio', `${videoWidth}/${videoHeight}`);
+        }
+    }
+
+    if (compSlider && compHandle) {
+        let isSliding = false;
+
+        const startSlide = (e) => {
+            isSliding = true;
+            e.preventDefault();
+        };
+
+        const stopSlide = () => {
+            isSliding = false;
+        };
+
+        const moveSlide = (clientX) => {
+            if (!isSliding) return;
+            
+            const rect = compSlider.getBoundingClientRect();
+            const x = clientX - rect.left;
+            let percentage = (x / rect.width) * 100;
+            
+            percentage = Math.max(0, Math.min(percentage, 100));
+            
+            compSlider.style.setProperty('--clip-pos', `${percentage}%`);
+            compHandle.style.left = `${percentage}%`;
+        };
+
+        // 鼠标事件
+        compHandle.addEventListener('mousedown', startSlide);
+        window.addEventListener('mouseup', stopSlide);
+        window.addEventListener('mousemove', (e) => moveSlide(e.clientX));
+
+        // 触摸事件 (移动端支持)
+        compHandle.addEventListener('touchstart', startSlide);
+        window.addEventListener('touchend', stopSlide);
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                moveSlide(e.touches[0].clientX);
+            }
+        });
+
+        // 点击 slider 快速定位
+        compSlider.addEventListener('click', (e) => {
+            if (e.target.closest('#comp-handle')) return;
+            isSliding = true;
+            moveSlide(e.clientX);
+            isSliding = false;
+        });
+    }
+
     // 极速单帧预览接口
     btnPreviewFrame.addEventListener('click', async () => {
         if (!currentVideoId || selectionBoxes.length === 0) {
-            alert('请先上传视频并在预览画面上画出至少一个需要去水印的红框区域！');
+            showToast('请先上传视频并在预览画面上画出至少一个需要去水印的红框区域！', 'warning');
             return;
         }
 
@@ -452,6 +587,11 @@ document.addEventListener('DOMContentLoaded', () => {
         btnPreviewFrame.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AI 极速修复中...';
         btnPreviewFrame.disabled = true;
 
+        if (canvasLoader) {
+            if (canvasLoaderText) canvasLoaderText.textContent = 'AI 正在分析并重构当前帧...';
+            canvasLoader.classList.add('active');
+        }
+
         try {
             const response = await fetch('/api/preview-frame', {
                 method: 'POST',
@@ -460,26 +600,35 @@ document.addEventListener('DOMContentLoaded', () => {
                     video_id: currentVideoId,
                     regions: regions,
                     method: selectMethod.value,
-                feather: parseInt(inputFeather.value),
-                frame_index: parseInt(timelineSlider.value)
-            })
+                    feather: parseInt(inputFeather.value),
+                    frame_index: parseInt(timelineSlider.value)
+                })
             });
 
             const data = await response.json();
             if (data.success && data.preview_frame) {
-                // Show comparison view instead of updating the main canvas
+                // 设置对比滑块的数据源
+                if (beforeImage) beforeImage.src = previewImage.src;
                 afterImage.src = 'data:image/jpeg;base64,' + data.preview_frame;
+                
                 comparisonView.style.display = 'block';
+                
+                // 重置并初始化滑块位置
+                resetComparisonSlider();
+                
+                // 平滑滚动到对比视图
                 comparisonView.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                showToast('当前帧 AI 预览生成成功！', 'success');
             } else {
-                alert('预览失败: ' + (data.detail || '未知错误'));
+                showToast('预览失败: ' + (data.detail || '未知错误'), 'error');
             }
         } catch (error) {
             console.error('Error generating preview:', error);
-            alert('请求预览异常，请查看控制台');
+            showToast('请求预览出现网络异常', 'error');
         } finally {
             btnPreviewFrame.innerHTML = originalText;
             btnPreviewFrame.disabled = false;
+            if (canvasLoader) canvasLoader.classList.remove('active');
         }
     });
 
@@ -533,11 +682,12 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .then(data => {
             currentJobId = data.job_id;
+            showToast('去水印任务创建成功，开始处理视频...', 'success');
             showStep('processing');
             startPollingStatus();
         })
         .catch(err => {
-            alert('去水印任务启动失败: ' + err.message);
+            showToast('去水印任务启动失败: ' + err.message, 'error');
         });
     });
 
@@ -570,15 +720,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 } else if (data.status === 'completed') {
                     clearInterval(pollInterval);
+                    showToast('视频去水印任务处理完成！', 'success');
                     showSuccess(data.ffmpeg_used);
                 } else if (data.status === 'failed') {
                     clearInterval(pollInterval);
-                    alert('处理视频失败: ' + (data.error_message || '未知错误'));
+                    showToast('处理视频失败: ' + (data.error_message || '未知错误'), 'error');
                     showStep('configure');
                 }
             })
             .catch(err => {
                 console.error('进度轮询错误: ', err);
+                // 轮询中的单次网络波动不弹窗，仅记录控制台，避免影响用户体验
             });
         }, 800);
     }

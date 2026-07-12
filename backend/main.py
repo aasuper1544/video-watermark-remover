@@ -2,6 +2,7 @@ import os
 import uuid
 import shutil
 import time
+import asyncio
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,10 +32,10 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(FRONTEND_DIR, exist_ok=True)
 
-def cleanup_old_files(max_age_seconds: int = 7200):
-    """自动清理上传目录和输出目录中超过 2 小时未被修改的文件"""
+def cleanup_old_files(max_age_seconds: int = 600):
+    """自动清理上传目录、处理结果输出目录中超过 10 分钟未被修改的文件"""
     now = time.time()
-    for directory in [UPLOAD_DIR, OUTPUT_DIR]:
+    for directory in [UPLOAD_DIR, OUTPUT_DIR, os.path.join(BASE_DIR, "output")]:
         if not os.path.exists(directory):
             continue
         for filename in os.listdir(directory):
@@ -48,6 +49,26 @@ def cleanup_old_files(max_age_seconds: int = 7200):
                         os.remove(filepath)
             except Exception as e:
                 print(f"自动清理文件 {filename} 失败: {e}")
+
+async def cleanup_scheduler():
+    """后台定时任务：每 60 秒运行一次，清理超过 10 分钟的文件和释放空闲模型内存"""
+    while True:
+        try:
+            cleanup_old_files(max_age_seconds=600)
+        except Exception as e:
+            print(f"自动清理历史文件失败: {e}")
+            
+        try:
+            from .remover import cleanup_lama_session
+            cleanup_lama_session()
+        except Exception as e:
+            print(f"清理 LaMa ONNX 会话内存失败: {e}")
+            
+        await asyncio.sleep(60)
+
+@app.on_event("startup")
+async def start_cleanup_scheduler():
+    asyncio.create_task(cleanup_scheduler())
 
 # 临时视频映射：video_id -> video_file_path
 uploaded_videos = {}
