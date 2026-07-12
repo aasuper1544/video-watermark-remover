@@ -160,7 +160,7 @@ class WatermarkRemover:
                     rx, ry, rw, rh = region['x'], region['y'], region['w'], region['h']
                     region_hps = high_passes[i]
                     if len(region_hps) > 0:
-                        temporal_min = np.minimum.reduce(region_hps)
+                        temporal_min = np.percentile(region_hps, 30, axis=0).astype(np.uint8)
                         _, mask_est = cv2.threshold(temporal_min, 4, 255, cv2.THRESH_BINARY)
                         
                         kernel_close = np.ones((3, 3), np.uint8)
@@ -458,7 +458,7 @@ class WatermarkRemover:
                     rx, ry, rw, rh = region['x'], region['y'], region['w'], region['h']
                     region_hps = high_passes[i]
                     if len(region_hps) > 0:
-                        temporal_min = np.minimum.reduce(region_hps)
+                        temporal_min = np.percentile(region_hps, 30, axis=0).astype(np.uint8)
                         _, mask_est = cv2.threshold(temporal_min, 4, 255, cv2.THRESH_BINARY)
                         
                         kernel_close = np.ones((3, 3), np.uint8)
