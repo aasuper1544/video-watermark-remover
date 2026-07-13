@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let previewImage = new Image(); // 缓存首帧图像
     let currentJobId = null;
     let pollInterval = null;
+    let currentActiveFileId = null; // 当前活跃的视频素材 ID
 
     // DOM 元素
     const dropzone = document.getElementById('dropzone');
@@ -160,7 +161,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 totalFrames: 0,
                 previewFrame: null,
                 selected: true,
-                rawFile: file
+                rawFile: file,
+                regions: [] // 预定保存的去水印选区坐标
             };
             uploadedFiles.push(fileItem);
         }
@@ -193,11 +195,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusText = '<span style="color: var(--danger-color);"><i class="fa-solid fa-circle-xmark"></i> 解析失败</span>';
             }
             
+            let watermarkText = '-';
+            if (file.status === 'ready') {
+                if (file.regions && file.regions.length > 0) {
+                    watermarkText = `<span style="color: var(--success-color); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> 已预定 (${file.regions.length}个)</span>`;
+                } else {
+                    watermarkText = '<span style="color: var(--secondary-color);"><i class="fa-solid fa-clock-rotate-left"></i> 待配置 (默认右下)</span>';
+                }
+            }
+            
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><input type="checkbox" class="chk-file-select" data-id="${file.id}" ${file.selected ? 'checked' : ''} ${file.status === 'ready' ? '' : 'disabled'}></td>
                 <td style="word-break: break-all; max-width: 300px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${file.name}</td>
                 <td>${file.size}</td>
+                <td>${watermarkText}</td>
                 <td>${statusText}</td>
             `;
             tbody.appendChild(tr);
@@ -290,18 +302,133 @@ document.addEventListener('DOMContentLoaded', () => {
         renderBatchFilesTable();
     }
 
-    // 下一步配置页面转场事件
-    document.getElementById('btn-next-config').addEventListener('click', () => {
-        const selected = uploadedFiles.filter(f => f.status === 'ready' && f.selected);
-        if (selected.length === 0) return;
+    // --- 步骤 2 选区管理辅助函数：为每个视频单独预定和加载红框 ---
+    
+    // 保存当前画布上的选区框百分比到对应的视频对象中
+    function saveCurrentRegionsToActiveFile() {
+        if (!currentActiveFileId) return;
+        const file = uploadedFiles.find(f => f.id === currentActiveFileId);
+        if (!file) return;
         
-        const first = selected[0];
-        currentVideoId = first.videoId;
-        videoWidth = first.width;
-        videoHeight = first.height;
-        videoFps = first.fps;
-        videoTotalFrames = first.total_frames;
-        videoDimsBadge.textContent = `${videoWidth} x ${videoHeight} (${videoFps.toFixed(1)} FPS) - [配置模板: ${first.name}]`;
+        file.regions = selectionBoxes.map(box => {
+            const left = parseFloat(box.style.left) || 0;
+            const top = parseFloat(box.style.top) || 0;
+            const width = parseFloat(box.style.width) || 100;
+            const height = parseFloat(box.style.height) || 50;
+            
+            return {
+                leftPct: left / canvasWidth,
+                topPct: top / canvasHeight,
+                widthPct: width / canvasWidth,
+                heightPct: height / canvasHeight
+            };
+        });
+        
+        // 动态更新 Step 1 中的素材列表文字
+        renderBatchFilesTable();
+    }
+
+    // 从活跃的视频对象中读取此前预定的选区百分比，并绝对换算后在画布上渲染
+    function loadRegionsFromActiveFile() {
+        if (!currentActiveFileId) return;
+        const file = uploadedFiles.find(f => f.id === currentActiveFileId);
+        if (!file) return;
+        
+        // 清空画布上所有多余的红框
+        clearAllSelectionBoxes();
+        
+        if (file.regions && file.regions.length > 0) {
+            file.regions.forEach(r => {
+                createSelectionBoxOnCanvas(
+                    r.leftPct * canvasWidth,
+                    r.topPct * canvasHeight,
+                    r.widthPct * canvasWidth,
+                    r.heightPct * canvasHeight
+                );
+            });
+        } else {
+            // 如果该视频此前没有任何配置，自动应用默认的右下角预设
+            applyPreset('bottom-right');
+            // 并自动将该默认预设存盘
+            saveCurrentRegionsToActiveFile();
+        }
+    }
+
+    function clearAllSelectionBoxes() {
+        selectionBoxes.forEach(b => b.remove());
+        selectionBoxes = [];
+    }
+
+    function createSelectionBoxOnCanvas(left, top, width, height) {
+        const box = createSelectionBox();
+        box.style.left = `${left}px`;
+        box.style.top = `${top}px`;
+        box.style.width = `${width}px`;
+        box.style.height = `${height}px`;
+        return box;
+    }
+
+    // 渲染右侧“素材预定与切换”列表
+    function renderConfigVideoSelector() {
+        const container = document.getElementById('config-video-selector-list');
+        if (!container) return;
+        container.innerHTML = '';
+        
+        const selected = uploadedFiles.filter(f => f.status === 'ready' && f.selected);
+        selected.forEach(file => {
+            const item = document.createElement('div');
+            item.className = 'selector-item';
+            
+            const hasRegions = file.regions && file.regions.length > 0;
+            const badgeClass = hasRegions ? 'badge-success' : 'badge-warning';
+            const badgeText = hasRegions ? `已预定 (${file.regions.length})` : '待设置 (默认右下)';
+            
+            item.innerHTML = `
+                <span class="video-name" style="flex: 1; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; font-size: 0.85rem; font-weight: 500; text-align: left;">${file.name}</span>
+                <span class="badge ${badgeClass}" style="font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; background: ${hasRegions ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'}; color: ${hasRegions ? 'var(--success-color)' : '#f59e0b'}; margin-left: 8px;">${badgeText}</span>
+            `;
+            
+            item.style.display = 'flex';
+            item.style.justifyContent = 'space-between';
+            item.style.alignItems = 'center';
+            item.style.padding = '8px';
+            item.style.borderRadius = '6px';
+            item.style.cursor = 'pointer';
+            item.style.transition = 'all 0.2s';
+            
+            if (file.id === currentActiveFileId) {
+                item.style.background = 'rgba(99, 102, 241, 0.15)';
+                item.style.border = '1px solid var(--primary-color)';
+            } else {
+                item.style.background = 'rgba(255,255,255,0.02)';
+                item.style.border = '1px solid transparent';
+            }
+            
+            item.addEventListener('click', () => {
+                if (file.id === currentActiveFileId) return;
+                
+                // 1. 存盘当前的选区框
+                saveCurrentRegionsToActiveFile();
+                
+                // 2. 载入点击的视频
+                switchActiveVideoForConfig(file.id);
+            });
+            
+            container.appendChild(item);
+        });
+    }
+
+    function switchActiveVideoForConfig(fileId) {
+        currentActiveFileId = fileId;
+        const file = uploadedFiles.find(f => f.id === fileId);
+        if (!file) return;
+        
+        currentVideoId = file.videoId;
+        videoWidth = file.width;
+        videoHeight = file.height;
+        videoFps = file.fps;
+        videoTotalFrames = file.total_frames;
+        videoDimsBadge.textContent = `${videoWidth} x ${videoHeight} (${videoFps.toFixed(1)} FPS) - [配置中: ${file.name}]`;
         
         if (videoTotalFrames > 0) {
             timelineSlider.max = videoTotalFrames - 1;
@@ -310,11 +437,41 @@ document.addEventListener('DOMContentLoaded', () => {
             updateTimeDisplay(0, videoFps, videoTotalFrames);
         }
         
+        // 刷新列表显示高亮
+        renderConfigVideoSelector();
+        
+        // 载入图片并初始化画布
         previewImage.onload = () => {
-            initCanvas();
-            showStep('configure');
+            const container = document.getElementById('canvas-container');
+            const maxDisplayWidth = Math.min(container.parentElement.clientWidth || 600, 680);
+            const aspect = videoWidth / videoHeight;
+            canvasWidth = maxDisplayWidth;
+            canvasHeight = maxDisplayWidth / aspect;
+            
+            previewCanvas.width = canvasWidth;
+            previewCanvas.height = canvasHeight;
+            container.style.width = `${canvasWidth}px`;
+            container.style.height = `${canvasHeight}px`;
+            
+            ctx.drawImage(previewImage, 0, 0, canvasWidth, canvasHeight);
+            
+            // 绘制当前视频预备的红框选区
+            loadRegionsFromActiveFile();
         };
-        previewImage.src = 'data:image/jpeg;base64,' + first.previewFrame;
+        previewImage.src = 'data:image/jpeg;base64,' + file.previewFrame;
+    }
+
+    // 下一步配置页面转场事件
+    document.getElementById('btn-next-config').addEventListener('click', () => {
+        const selected = uploadedFiles.filter(f => f.status === 'ready' && f.selected);
+        if (selected.length === 0) return;
+        
+        const first = selected[0];
+        
+        // 切换活跃视频配置为第一个视频并完成初始化加载
+        switchActiveVideoForConfig(first.id);
+        
+        showStep('configure');
     });
 
     function resetUploadZone() {
@@ -411,6 +568,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.currentTarget.classList.add('active');
             const presetName = e.currentTarget.dataset.preset;
             applyPreset(presetName);
+            saveCurrentRegionsToActiveFile();
         });
     });
 
@@ -435,6 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (selectionBoxes.length > 1) {
                 box.remove();
                 selectionBoxes = selectionBoxes.filter(b => b !== box);
+                saveCurrentRegionsToActiveFile();
             } else {
                 showToast("至少需要保留一个去水印区域！", "warning");
             }
@@ -543,6 +702,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 isDragging = false;
                 isResizing = false;
                 activeHandle = null;
+                saveCurrentRegionsToActiveFile();
             }
         });
 
@@ -560,6 +720,7 @@ document.addEventListener('DOMContentLoaded', () => {
             box.style.width = `${canvasWidth * 0.2}px`;
             box.style.height = `${canvasHeight * 0.2}px`;
             setActivePresetButton('manual');
+            saveCurrentRegionsToActiveFile();
         });
     }
 
@@ -781,6 +942,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // 保存当前画布上的选区
+        saveCurrentRegionsToActiveFile();
+
         const originalText = btnStart.innerHTML;
         btnStart.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在创建排队任务...';
         btnStart.disabled = true;
@@ -788,23 +952,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
         queueJobs = [];
 
-        // 遍历所有选中的视频，并按照各自的分辨率自适应换算水印位置坐标
+        // 遍历所有选中的视频
         for (let file of selectedFiles) {
-            const fileScaleX = file.width / canvasWidth;
-            const fileScaleY = file.height / canvasHeight;
-            const fileRegions = selectionBoxes.map(box => {
-                const left = parseFloat(box.style.left) || 0;
-                const top = parseFloat(box.style.top) || 0;
-                const width = parseFloat(box.style.width) || 100;
-                const height = parseFloat(box.style.height) || 50;
+            let fileRegions = [];
+            
+            // 如果该文件有独立预定的选区，则换算百分比回它的真实分辨率尺寸
+            if (file.regions && file.regions.length > 0) {
+                fileRegions = file.regions.map(r => {
+                    const x = Math.max(0, Math.round(r.leftPct * file.width));
+                    const y = Math.max(0, Math.round(r.topPct * file.height));
+                    const w = Math.min(file.width - x, Math.round(r.widthPct * file.width));
+                    const h = Math.min(file.height - y, Math.round(r.heightPct * file.height));
+                    return { x, y, w, h };
+                });
+            } else {
+                // 如果没有独立配置，则回退使用当前画布上绘制的坐标（自适应缩放）
+                const fileScaleX = file.width / canvasWidth;
+                const fileScaleY = file.height / canvasHeight;
+                fileRegions = selectionBoxes.map(box => {
+                    const left = parseFloat(box.style.left) || 0;
+                    const top = parseFloat(box.style.top) || 0;
+                    const width = parseFloat(box.style.width) || 100;
+                    const height = parseFloat(box.style.height) || 50;
 
-                const x = Math.max(0, Math.round(left * fileScaleX));
-                const y = Math.max(0, Math.round(top * fileScaleY));
-                const w = Math.min(file.width - x, Math.round(width * fileScaleX));
-                const h = Math.min(file.height - y, Math.round(height * fileScaleY));
-                
-                return { x, y, w, h };
-            });
+                    const x = Math.max(0, Math.round(left * fileScaleX));
+                    const y = Math.max(0, Math.round(top * fileScaleY));
+                    const w = Math.min(file.width - x, Math.round(width * fileScaleX));
+                    const h = Math.min(file.height - y, Math.round(height * fileScaleY));
+                    
+                    return { x, y, w, h };
+                });
+            }
 
             const payload = {
                 video_id: file.videoId,
@@ -947,6 +1125,13 @@ document.addEventListener('DOMContentLoaded', () => {
             tbody.appendChild(tr);
         });
 
+        // 动态控制 “一键打包下载 (ZIP)” 按钮的可点状态
+        const completedJobs = queueJobs.filter(j => j.status === 'completed');
+        const zipBtn = document.getElementById('btn-download-all-zip');
+        if (zipBtn) {
+            zipBtn.disabled = completedJobs.length === 0;
+        }
+
         // 绑定取消按钮事件
         tbody.querySelectorAll('.btn-cancel-job').forEach(btn => {
             btn.addEventListener('click', async () => {
@@ -961,6 +1146,47 @@ document.addEventListener('DOMContentLoaded', () => {
                     showToast('取消任务失败', 'error');
                 }
             });
+        });
+    }
+
+    // 一键打包下载 (ZIP) 按钮事件
+    const zipBtn = document.getElementById('btn-download-all-zip');
+    if (zipBtn) {
+        zipBtn.addEventListener('click', async () => {
+            const completedIds = queueJobs.filter(j => j.status === 'completed').map(j => j.jobId);
+            if (completedIds.length === 0) return;
+            
+            const originalText = zipBtn.innerHTML;
+            zipBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在打包中...';
+            zipBtn.disabled = true;
+            
+            try {
+                const res = await fetch('/api/download-zip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_ids: completedIds })
+                });
+                
+                if (res.ok) {
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'processed_videos.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                    showToast('打包下载成功！', 'success');
+                } else {
+                    showToast('打包下载失败', 'error');
+                }
+            } catch (e) {
+                showToast('打包下载异常: ' + e.message, 'error');
+            } finally {
+                zipBtn.innerHTML = originalText;
+                zipBtn.disabled = false;
+            }
         });
     }
 

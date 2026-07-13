@@ -54,7 +54,8 @@
                                     <th style="width: 40px;"><input type="checkbox" id="chk-select-all" checked></th>
                                     <th>视频名称</th>
                                     <th style="width: 100px;">大小</th>
-                                    <th style="width: 150px;">状态</th>
+                                    <th style="width: 180px;">水印设置</th>
+                                    <th style="width: 150px;">上传状态</th>
                                 </tr>
                             </thead>
                             <tbody id="batch-files-body">
@@ -135,6 +136,14 @@
                     <!-- 右侧：控制与选项 -->
                     <div class="control-panel">
                         <h2>配置水印移除参数</h2>
+                        
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-video"></i> 正在配置的视频素材 (点击可切换)</label>
+                            <div id="config-video-selector-list" style="max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 6px; margin-top: 5px;">
+                                <!-- 动态加载已勾选的视频项，点击随时切换配置 -->
+                            </div>
+                            <span class="help-text">请依次点击各个视频，并分别为它们预定不同的去水印选区框。</span>
+                        </div>
                         
                         <div class="form-group">
                             <label><i class="fa-solid fa-shapes"></i> 快速选择预设</label>
@@ -233,7 +242,10 @@
                         </table>
                     </div>
                     
-                    <div class="queue-footer-actions" style="margin-top: 25px; display: flex; justify-content: center; gap: 15px;">
+                    <div class="queue-footer-actions" style="margin-top: 25px; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                        <button id="btn-download-all-zip" class="btn btn-primary btn-glow" style="padding: 10px 20px;" disabled>
+                            <i class="fa-solid fa-file-zipper"></i> 一键打包下载已完成视频 (ZIP)
+                        </button>
                         <button id="btn-cancel-all" class="btn btn-danger" style="padding: 10px 20px;">
                             <i class="fa-solid fa-ban"></i> 全部取消
                         </button>

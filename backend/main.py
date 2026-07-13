@@ -143,6 +143,9 @@ class PreviewRequest(BaseModel):
     feather: int = 5
     frame_index: int = 0
 
+class ZipRequest(BaseModel):
+    job_ids: List[str]
+
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
     """上传视频，生成首帧预览图并返回视频信息"""
@@ -364,6 +367,55 @@ async def download_file(job_id: str):
         path=filepath,
         filename="video_no_watermark.mp4",
         media_type="video/mp4"
+    )
+
+@app.post("/api/download-zip")
+async def download_zip(req: ZipRequest, background_tasks: BackgroundTasks):
+    """打包多个处理完成的视频并作为 ZIP 压缩包下载"""
+    import tempfile
+    import zipfile
+    
+    files_to_zip = []
+    for job_id in req.job_ids:
+        status_info = get_job_status(job_id)
+        if status_info.get("status") == "completed":
+            filename = f"processed_{job_id}.mp4"
+            filepath = os.path.join(OUTPUT_DIR, filename)
+            if os.path.exists(filepath):
+                # 尝试获取原始视频名，增强打包文件的可读性
+                orig_path = status_info.get("video_path")
+                orig_name = os.path.basename(orig_path) if orig_path else f"{job_id}.mp4"
+                name_base, _ = os.path.splitext(orig_name)
+                files_to_zip.append((filepath, f"no_watermark_{name_base}.mp4"))
+                
+    if not files_to_zip:
+        raise HTTPException(status_code=400, detail="没有可用于打包的已完成任务")
+        
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+    
+    def create_zip():
+        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for filepath, arcname in files_to_zip:
+                zipf.write(filepath, arcname)
+                
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, create_zip)
+    
+    def remove_temp_file():
+        try:
+            if os.path.exists(temp_zip_path):
+                os.remove(temp_zip_path)
+        except Exception as e:
+            print(f"清理临时 ZIP 文件失败: {e}")
+            
+    background_tasks.add_task(remove_temp_file)
+    
+    return FileResponse(
+        path=temp_zip_path,
+        filename="processed_videos.zip",
+        media_type="application/zip"
     )
 
 # 挂载前端静态文件
