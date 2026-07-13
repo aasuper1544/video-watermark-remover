@@ -93,7 +93,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const onTransitionEnd = () => {
             toast.remove();
             toast.removeEventListener('transitionend', onTransitionEnd);
-        const steps = {
+        };
+        toast.addEventListener('transitionend', onTransitionEnd);
+    }
+
+    const steps = {
         upload: document.getElementById('step-upload'),
         configure: document.getElementById('step-configure'),
         processing: document.getElementById('step-processing'),
