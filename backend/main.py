@@ -36,8 +36,8 @@ os.makedirs(FRONTEND_DIR, exist_ok=True)
 active_uploads = set()
 uploads_lock = threading.Lock()
 
-def cleanup_old_files(max_age_seconds: int = 600):
-    """自动清理上传目录、处理结果输出目录中超过 10 分钟未被修改的文件，线程安全且不会删除活跃文件"""
+def cleanup_old_files(max_age_seconds: int = 86400):
+    """自动清理上传目录、处理结果输出目录中超过 24 小时（1天）未被修改的文件，线程安全且不会删除活跃文件"""
     now = time.time()
     
     # 收集当前所有活跃的文件（上传中、处理中）
@@ -97,11 +97,11 @@ def cleanup_old_files(max_age_seconds: int = 600):
             uploaded_videos.pop(vid, None)
 
 async def cleanup_scheduler():
-    """后台定时任务：每 60 秒运行一次，清理超过 10 分钟的文件和释放空闲模型内存"""
+    """后台定时任务：每 60 秒运行一次，清理超过 24 小时（1天）的文件和释放空闲模型内存"""
     loop = asyncio.get_running_loop()
     while True:
         try:
-            await loop.run_in_executor(None, cleanup_old_files, 600)
+            await loop.run_in_executor(None, cleanup_old_files, 86400)
         except Exception as e:
             print(f"自动清理历史文件失败: {e}")
             
